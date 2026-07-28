@@ -3,7 +3,13 @@ package com.neo4j.tools.certtool.output;
 import com.neo4j.tools.certtool.CertificateGenerator.NodeBundle;
 import com.neo4j.tools.certtool.CertificateGenerator.ScopeMaterial;
 import com.neo4j.tools.certtool.model.Scope;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.Arrays;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 
@@ -28,7 +34,9 @@ public final class ConfSnippet {
      * @param password the private key password, which Neo4j requires in clear text; may be null
      *     when keys were written unencrypted
      */
-    public static String render(NodeBundle bundle, char[] password, Instant generatedAt) {
+    public static void writeTo(
+            OutputStream out, NodeBundle bundle, char[] password, Instant generatedAt)
+            throws IOException {
         StringBuilder text = new StringBuilder();
         text.append("# Neo4j SSL policy configuration for node '")
                 .append(bundle.node().name())
@@ -61,7 +69,13 @@ public final class ConfSnippet {
             text.append(prefix).append(".trusted_dir=trusted\n");
             text.append(prefix).append(".revoked_dir=revoked\n");
             if (password != null) {
-                text.append(prefix).append(".private_key_password=").append(password).append('\n');
+                // The surrounding text is written out first so the password can go straight to the
+                // stream. Appending it to the StringBuilder would leave it in the builder's backing
+                // array and in the String that toString() produces, neither of which can be zeroed.
+                text.append(prefix).append(".private_key_password=");
+                flush(out, text);
+                writeSecret(out, password);
+                text.append('\n');
             }
             if (scope.mutualAuthentication()) {
                 text.append(prefix).append(".client_auth=REQUIRE\n");
@@ -91,7 +105,33 @@ public final class ConfSnippet {
                     # server.http.enabled=false
                     """);
         }
-        return text.toString();
+        flush(out, text);
+    }
+
+    /** Writes the accumulated non-secret text and empties the builder. */
+    private static void flush(OutputStream out, StringBuilder text) throws IOException {
+        out.write(text.toString().getBytes(StandardCharsets.UTF_8));
+        text.setLength(0);
+    }
+
+    /**
+     * Writes a password to the stream, zeroing the encoded bytes afterwards.
+     *
+     * <p>The file itself necessarily holds the password in clear text, since that is how Neo4j
+     * reads it. This only avoids leaving additional copies on the heap.
+     */
+    private static void writeSecret(OutputStream out, char[] password) throws IOException {
+        ByteBuffer encoded = StandardCharsets.UTF_8.encode(CharBuffer.wrap(password));
+        byte[] bytes = new byte[encoded.remaining()];
+        encoded.get(bytes);
+        try {
+            out.write(bytes);
+        } finally {
+            Arrays.fill(bytes, (byte) 0);
+            if (encoded.hasArray()) {
+                Arrays.fill(encoded.array(), (byte) 0);
+            }
+        }
     }
 
     /** The warning written alongside a generated CA's private key. */

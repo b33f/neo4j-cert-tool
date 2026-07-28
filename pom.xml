@@ -6,7 +6,7 @@
 
   <groupId>com.neo4j.tools</groupId>
   <artifactId>neo4j-cert-tool</artifactId>
-  <version>1.0.0</version>
+  <version>1.0.1</version>
   <packaging>jar</packaging>
 
   <name>neo4j-cert-tool</name>

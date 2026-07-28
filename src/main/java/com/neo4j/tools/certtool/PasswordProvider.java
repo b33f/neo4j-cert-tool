@@ -87,38 +87,112 @@ public final class PasswordProvider implements AutoCloseable {
      */
     public static PasswordProvider fromFile(Path file, SecureRandom random) throws IOException {
         warnIfReadableByOthers(file);
-        List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
-        Map<String, char[]> passwords = new LinkedHashMap<>();
-        List<String> bareLines = new ArrayList<>();
 
-        for (String rawLine : lines) {
-            String line = rawLine.strip();
-            if (line.isEmpty() || line.startsWith("#")) {
-                continue;
+        // Read as bytes and decode into char[] by hand. Files.readAllLines would put every
+        // password into an immutable String, which cannot be zeroed and would sit on the heap for
+        // the rest of the run.
+        byte[] raw = Files.readAllBytes(file);
+        Map<String, char[]> passwords = new LinkedHashMap<>();
+        List<char[]> bareLines = new ArrayList<>();
+        try {
+            for (char[] line : splitLines(raw)) {
+                try {
+                    int from = 0;
+                    int to = line.length;
+                    while (from < to && Character.isWhitespace(line[from])) {
+                        from++;
+                    }
+                    while (to > from && Character.isWhitespace(line[to - 1])) {
+                        to--;
+                    }
+                    if (from == to || line[from] == '#') {
+                        continue;
+                    }
+                    int separator = indexOf(line, '=', from, to);
+                    if (separator > from) {
+                        // The subject name is not a secret, so a String is fine for it.
+                        String subject = new String(line, from, separator - from).strip();
+                        passwords.put(subject, Arrays.copyOfRange(line, separator + 1, to));
+                    } else {
+                        bareLines.add(Arrays.copyOfRange(line, from, to));
+                    }
+                } finally {
+                    Arrays.fill(line, '\0');
+                }
             }
-            int separator = line.indexOf('=');
-            if (separator > 0) {
-                String subject = line.substring(0, separator).strip();
-                String password = line.substring(separator + 1);
-                passwords.put(subject, password.toCharArray());
-            } else {
-                bareLines.add(line);
-            }
+        } finally {
+            Arrays.fill(raw, (byte) 0);
         }
 
         if (!bareLines.isEmpty()) {
             if (!passwords.isEmpty() || bareLines.size() > 1) {
+                bareLines.forEach(line -> Arrays.fill(line, '\0'));
+                passwords.values().forEach(password -> Arrays.fill(password, '\0'));
                 throw new IOException(
                         file
                                 + ": use either a single password on one line, or one "
                                 + "'subject=password' line per node, but not both");
             }
-            passwords.put(WILDCARD, bareLines.getFirst().toCharArray());
+            passwords.put(WILDCARD, bareLines.getFirst());
         }
         if (passwords.isEmpty()) {
             throw new IOException(file + ": no password found");
         }
+        warnIfWeak(file, passwords);
         return new PasswordProvider(Mode.FILE, false, passwords, random, null);
+    }
+
+    /**
+     * Decodes UTF-8 bytes and splits on line breaks without creating any {@link String}.
+     *
+     * <p>The decoded buffer is zeroed before returning, so the only remaining copies are the
+     * per-line arrays handed back to the caller.
+     */
+    private static List<char[]> splitLines(byte[] raw) {
+        java.nio.CharBuffer decoded = StandardCharsets.UTF_8.decode(java.nio.ByteBuffer.wrap(raw));
+        char[] all = new char[decoded.remaining()];
+        decoded.get(all);
+        try {
+            List<char[]> lines = new ArrayList<>();
+            int start = 0;
+            for (int i = 0; i <= all.length; i++) {
+                boolean end = i == all.length;
+                if (end || all[i] == '\n' || all[i] == '\r') {
+                    if (i > start) {
+                        lines.add(Arrays.copyOfRange(all, start, i));
+                    }
+                    start = i + 1;
+                }
+            }
+            return lines;
+        } finally {
+            Arrays.fill(all, '\0');
+        }
+    }
+
+    private static int indexOf(char[] line, char needle, int from, int to) {
+        for (int i = from; i < to; i++) {
+            if (line[i] == needle) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Warns about file-supplied passwords short enough to be worth guessing offline. The prompt
+     * enforces a minimum; a file cannot be rejected outright without breaking existing automation.
+     */
+    private static void warnIfWeak(Path file, Map<String, char[]> passwords) {
+        long weak = passwords.values().stream()
+                .filter(password -> password.length < MINIMUM_PROMPTED_LENGTH)
+                .count();
+        if (weak > 0) {
+            System.err.printf(
+                    "Warning: %s contains %d password(s) shorter than %d characters. "
+                            + "Key encryption is only as strong as the password behind it.%n",
+                    file, weak, MINIMUM_PROMPTED_LENGTH);
+        }
     }
 
     private static void warnIfReadableByOthers(Path file) {
@@ -175,14 +249,20 @@ public final class PasswordProvider implements AutoCloseable {
     private char[] generate() {
         byte[] entropy = new byte[GENERATED_ENTROPY_BYTES];
         random.nextBytes(entropy);
+        // base64url without padding: only characters that are safe to paste into neo4j.conf.
+        // Encoded to bytes rather than through encodeToString, so the password never exists as an
+        // immutable String that cannot be zeroed afterwards.
+        byte[] encoded = Base64.getUrlEncoder().withoutPadding().encode(entropy);
         try {
-            // base64url without padding: only characters that are safe to paste into neo4j.conf.
-            return Base64.getUrlEncoder()
-                    .withoutPadding()
-                    .encodeToString(entropy)
-                    .toCharArray();
+            char[] password = new char[encoded.length];
+            for (int i = 0; i < encoded.length; i++) {
+                // base64url output is ASCII, so the byte value is the character value.
+                password[i] = (char) (encoded[i] & 0xFF);
+            }
+            return password;
         } finally {
             Arrays.fill(entropy, (byte) 0);
+            Arrays.fill(encoded, (byte) 0);
         }
     }
 
@@ -239,14 +319,27 @@ public final class PasswordProvider implements AutoCloseable {
     /** Reads a single password from a file, used when unlocking an existing CA key. */
     public static char[] readSingleFrom(Path file) throws IOException {
         warnIfReadableByOthers(file);
-        try (var lines = Files.lines(file, StandardCharsets.UTF_8)) {
-            return lines.map(String::strip)
-                    .filter(line -> !line.isEmpty() && !line.startsWith("#"))
-                    .findFirst()
-                    .map(String::toCharArray)
-                    .orElseThrow(() -> new IOException(file + ": no password found"));
-        } catch (UncheckedIOException e) {
-            throw e.getCause();
+        byte[] raw = Files.readAllBytes(file);
+        try {
+            for (char[] line : splitLines(raw)) {
+                int from = 0;
+                int to = line.length;
+                while (from < to && Character.isWhitespace(line[from])) {
+                    from++;
+                }
+                while (to > from && Character.isWhitespace(line[to - 1])) {
+                    to--;
+                }
+                if (from < to && line[from] != '#') {
+                    char[] password = Arrays.copyOfRange(line, from, to);
+                    Arrays.fill(line, '\0');
+                    return password;
+                }
+                Arrays.fill(line, '\0');
+            }
+        } finally {
+            Arrays.fill(raw, (byte) 0);
         }
+        throw new IOException(file + ": no password found");
     }
 }

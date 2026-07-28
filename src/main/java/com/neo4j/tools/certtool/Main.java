@@ -199,7 +199,13 @@ public final class Main {
         // neo4j.conf.snippet, which Neo4j needs in clear text anyway.
         out.println();
         out.println("Generated private key passwords — record these now, they are not recoverable:");
-        generated.forEach((subject, password) -> out.printf("  %-14s %s%n", subject, new String(password)));
+        generated.forEach((subject, password) -> {
+            // Printed via the char[] directly: new String(password) would leave an immutable copy
+            // of the password on the heap that nothing can clear.
+            out.printf("  %-14s ", subject);
+            out.print(password);
+            out.println();
+        });
     }
 
     private void reportNextSteps(Options options, Result result, Reporter reporter) {

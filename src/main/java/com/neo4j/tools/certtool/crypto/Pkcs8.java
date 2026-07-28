@@ -59,8 +59,7 @@ public final class Pkcs8 {
         byte[] salt = new byte[SALT_BYTES];
         random.nextBytes(salt);
 
-        SecretKeyFactory keyFactory = SecretKeyFactory.getInstance(PBES2_ALGORITHM);
-        SecretKey derivedKey = keyFactory.generateSecret(new PBEKeySpec(password));
+        SecretKey derivedKey = deriveKey(PBES2_ALGORITHM, password);
 
         Cipher cipher = Cipher.getInstance(PBES2_ALGORITHM);
         cipher.init(Cipher.ENCRYPT_MODE, derivedKey, new PBEParameterSpec(salt, iterations), random);
@@ -76,6 +75,38 @@ public final class Pkcs8 {
         } finally {
             // The plaintext PKCS#8 copy is no longer needed; do not leave it on the heap.
             java.util.Arrays.fill(pkcs8, (byte) 0);
+            discard(derivedKey);
+        }
+    }
+
+    /**
+     * Derives the encryption key from a password, leaving no copy of the password behind.
+     *
+     * <p>{@link PBEKeySpec} takes its own copy of the password characters. That copy lives as long
+     * as the spec does unless {@link PBEKeySpec#clearPassword()} is called, so it is cleared here
+     * rather than left for the garbage collector.
+     */
+    private static SecretKey deriveKey(String algorithm, char[] password)
+            throws GeneralSecurityException {
+        PBEKeySpec keySpec = new PBEKeySpec(password);
+        try {
+            return SecretKeyFactory.getInstance(algorithm).generateSecret(keySpec);
+        } finally {
+            keySpec.clearPassword();
+        }
+    }
+
+    /**
+     * Destroys a derived key if its provider supports it.
+     *
+     * <p>Not all implementations do, and {@code Destroyable} is specified to throw rather than fail
+     * silently, so an unsupported implementation is not an error worth surfacing.
+     */
+    private static void discard(SecretKey key) {
+        try {
+            key.destroy();
+        } catch (javax.security.auth.DestroyFailedException | UnsupportedOperationException ignored) {
+            // Nothing further can be done; the key becomes unreachable when this method returns.
         }
     }
 
@@ -106,10 +137,12 @@ public final class Pkcs8 {
     public static PrivateKey decrypt(byte[] encryptedPrivateKeyInfo, char[] password)
             throws GeneralSecurityException, java.io.IOException {
         EncryptedPrivateKeyInfo encrypted = new EncryptedPrivateKeyInfo(encryptedPrivateKeyInfo);
-        SecretKeyFactory keyFactory = SecretKeyFactory.getInstance(encrypted.getAlgName());
-        SecretKey derivedKey = keyFactory.generateSecret(new PBEKeySpec(password));
-        PKCS8EncodedKeySpec keySpec = encrypted.getKeySpec(derivedKey);
-        return toPrivateKey(keySpec);
+        SecretKey derivedKey = deriveKey(encrypted.getAlgName(), password);
+        try {
+            return toPrivateKey(encrypted.getKeySpec(derivedKey));
+        } finally {
+            discard(derivedKey);
+        }
     }
 
     /** Parses an unencrypted DER-encoded PKCS#8 {@code PrivateKeyInfo}. */

@@ -10,6 +10,9 @@ runtime scope.
 
 Runs on Linux, macOS and Windows.
 
+> Provided without warranty, and not independently audited. For production, prefer certificates from
+> a real certificate authority — see [Security design, and its limits](#security-design-and-its-limits).
+
 ## Prerequisites
 
 | Tool | Needed for | Version |
@@ -345,6 +348,139 @@ command.
 
 On Windows, where there are no POSIX mode bits, anything that would be owner-only instead gets an
 explicit ACL granting the owner alone, which also stops inherited entries from applying.
+
+## Security design, and its limits
+
+> ### No warranty, and when not to use this
+>
+> This tool is distributed under the GNU GPL v3, which **disclaims all warranty** — see sections 15
+> and 16 of [LICENSE](LICENSE). It is written carefully, tested thoroughly, and designed to be as
+> secure as it can be. It has **not** been independently audited or formally reviewed by anyone.
+>
+> **For a production deployment, get your certificates from a real certificate authority.** An
+> established CA — your organisation's internal PKI, or a public CA for anything client-facing —
+> brings key management, hardware protection, revocation, expiry monitoring and an audit trail that
+> a single-purpose tool cannot. The usual route is to generate the key and a certificate signing
+> request locally with a dedicated, long-audited tool such as OpenSSL, and send only the CSR away to
+> be signed:
+>
+> ```bash
+> # A key and a CSR carrying the names and usages Neo4j needs
+> openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 \
+>   -keyout private.key -out core1.csr -noenc \
+>   -subj "/O=Example Ltd/CN=core1.example.com" \
+>   -addext "subjectAltName=DNS:core1.example.com,IP:10.0.0.11" \
+>   -addext "extendedKeyUsage=serverAuth,clientAuth"
+>
+> # Then protect the key in the same format Neo4j reads
+> openssl pkcs8 -topk8 -in private.key -out private.key.enc \
+>   -v2 aes-256-cbc -v2prf hmacWithSHA256
+> ```
+>
+> Put the signed certificate in `public.crt`, the issuing CA's certificate in `trusted/`, and the
+> encrypted key in `private.key`. The layout and permissions this tool produces are the same either
+> way, so `neo4j-cert-tool verify` still checks that result.
+>
+> Where this tool is a reasonable fit: development and test clusters, internal clusters whose trust
+> is genuinely private to the cluster, and getting a working TLS configuration quickly so that the
+> rest of a deployment can be tested. It cannot sign a CSR produced elsewhere, and it cannot produce
+> one.
+
+### What uses the JDK, and what does not
+
+Every cryptographic primitive is the JDK's. Nothing cryptographic is reimplemented here — no
+cipher, no hash, no key derivation, no random number generator.
+
+| Concern | Implementation |
+| --- | --- |
+| Key pair generation, EC and RSA | JDK `KeyPairGenerator` |
+| All randomness — keys, serial numbers, salts, IVs, generated passwords | JDK `SecureRandom` |
+| Certificate signing and signature verification | JDK `Signature` (ECDSA, RSA with SHA-256/384/512) |
+| Private key encryption, PBES2 | JDK `SecretKeyFactory` and `Cipher` (`PBEWithHmacSHA256AndAES_256`) |
+| Private key decryption | JDK `EncryptedPrivateKeyInfo`, `SecretKeyFactory`, `KeyFactory` |
+| Certificate parsing, chain validation | JDK `CertificateFactory`, `CertPathValidator` (PKIX) |
+| Key identifier digest | JDK `MessageDigest` |
+| Base64 | JDK `java.util.Base64` |
+| File permissions and ACLs | JDK `Files`, `PosixFilePermissions`, `AclFileAttributeView` |
+| TLS handshakes in the test suite | JDK `SSLContext`, `KeyManagerFactory`, `TrustManagerFactory` |
+
+What *is* written by hand is **serialisation, not cryptography** — the ASN.1/DER encoding and the
+X.509 structure that wraps the JDK's output:
+
+| Written here | Why |
+| --- | --- |
+| DER encoder and a minimal reader (`Der`) | The JDK has no public ASN.1 API |
+| X.509 v3 certificate assembly (`X509Builder`) | The JDK has no public certificate builder; `sun.security.x509` is internal and would need `--add-exports` |
+| Extension encoding (`Extensions`) — basicConstraints, keyUsage, extendedKeyUsage, subjectAltName, subject and authority key identifiers | Same reason |
+| Distinguished name encoding (`DistinguishedName`) | Same reason |
+| PEM framing (`Pem`) — labels and line wrapping around JDK Base64 | JDK 25's `PEMEncoder` is a preview API and would force `--enable-preview` on every user |
+| The `EncryptedPrivateKeyInfo` envelope (`Pkcs8`) | The JDK's own constructor silently drops the PBKDF2 PRF, producing a key nothing can decrypt. The ciphertext, salt, IV and derived key are all still the JDK's; only the ASN.1 wrapper around them is ours |
+
+**Where the risk actually sits.** A mistake in the hand-written code usually fails loudly: a
+malformed certificate will not parse, and a broken chain will not validate. Every certificate is
+handed back through the JDK's `CertificateFactory` as it is built, and every run re-reads its own
+output from disk and checks it — CA-issued chains through the JDK's `CertPathValidator`, self-signed
+certificates by verifying their own signature and their presence in `trusted/`. Structural errors
+therefore surface at generation time rather than at the far end of a handshake.
+
+The exception worth naming is **extension content**. A wrong `keyUsage` bit, a missing `critical`
+flag, or a `basicConstraints` that failed to mark a leaf as a non-CA would be a security defect
+rather than a parse error, and would not necessarily be loud — a certificate can be perfectly valid
+and still grant more than it should. That is why those specific fields carry the heaviest test
+coverage, asserted for every scope individually. The test suite does not shell out to OpenSSL;
+generated certificates were cross-checked by hand with `openssl x509 -text` and `openssl verify`
+during development, and repeating that after any change to the extension code is worthwhile.
+
+### Design decisions that matter
+
+- **No third-party runtime dependencies at all**, enforced at build time by a banned-dependencies
+  rule. The supply chain for the shipped artifact is the JDK and nothing else.
+- **Private keys are encrypted at rest** with PBES2: PBKDF2-HMAC-SHA256 at 600,000 iterations,
+  AES-256-CBC, a fresh 16-byte salt and IV per key. Two keys never share salt or IV, so identical
+  keys or passwords are not detectable by comparing files.
+- **Passwords never appear as command line arguments**, because arguments are visible to every user
+  on the machine through `ps` and are written to shell history.
+- **Passwords are never held in a `String`.** A `String` is immutable and cannot be cleared, so one
+  containing a password stays on the heap until the garbage collector happens to reclaim it. Every
+  path avoids one: password files are read as bytes and decoded into `char[]` by hand rather than via
+  `Files.readAllLines`; generated passwords are base64-encoded to bytes rather than through
+  `encodeToString`; the run summary prints the `char[]` directly; and `neo4j.conf.snippet` is
+  streamed to disk so the password is never assembled into a buffer first. Arrays are zeroed as soon
+  as they are no longer needed, and `PBEKeySpec.clearPassword()` is called so the copy the JDK takes
+  during key derivation is cleared too.
+
+  This is defence in depth, not a guarantee. A moving garbage collector may leave copies of an array
+  behind, and the dominant exposure is not the heap at all — it is that `neo4j.conf` holds the
+  password in clear text because Neo4j requires it there.
+- **One key pair per node per scope.** A key compromised on one channel does not extend to the
+  others, and a single node's compromise does not implicate its peers.
+- **Permissions are set at creation, not afterwards**, so a private key never exists on disk in a
+  world-readable state, not even briefly. An existing file in the way is deleted rather than
+  truncated, so a symlink cannot redirect a key to somewhere unprotected. POSIX is the primary
+  target; on Windows, restriction is done by setting an explicit owner-only ACL, which also stops
+  inherited permissions from applying.
+- **The staging directory is `0700`** because, until the bundles are distributed, it holds the
+  private key of every node in the cluster.
+- **The CA key is never needed on a cluster member** and the tool says so, in the run summary and in
+  a `README.txt` beside the key.
+- **128-bit random serial numbers**, and SHA-256 or stronger signatures throughout. SHA-1 appears in
+  exactly one place — deriving key identifiers, RFC 5280's naming function for chain building — where
+  it is not relied on for collision resistance.
+
+### What this tool does not do
+
+- **No revocation.** `revoked/` is created empty for you to place CRLs in; the tool neither issues
+  nor maintains one. Withdrawing a node's access means re-issuing and redistributing.
+- **No key backup, escrow or recovery.** Lose a generated password and that key is unrecoverable.
+- **No hardware protection.** The CA private key is a file guarded by a password. There is no
+  PKCS#11 or HSM support, which is one of the clearest reasons to prefer a real CA.
+- **No CSR handling** in either direction, and no OCSP, certificate transparency, or automated
+  renewal.
+- **It cannot protect the key password from anyone who can read `neo4j.conf`**, because Neo4j
+  requires that password in clear text. See [Private key protection](#private-key-protection).
+- **A locally generated root CA is a high-value secret.** Anything holding it can mint a certificate
+  every cluster member will trust. That is inherent to the trust model, not a flaw in the tool, and
+  it is the main reason `intermediate` mode exists.
 
 ## Verifying
 

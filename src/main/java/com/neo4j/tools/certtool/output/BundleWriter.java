@@ -131,11 +131,12 @@ public final class BundleWriter {
 
         writeCertificatesTree(nodeRoot, bundle, password);
 
-        // The snippet carries the private key password, so it is as sensitive as the key itself.
-        FilePermissions.write(
+        // The snippet carries the private key password, so it is as sensitive as the key itself,
+        // and is streamed straight to disk rather than assembled in memory first.
+        FilePermissions.writeWith(
                 nodeRoot.resolve(Layout.CONF_SNIPPET_FILE),
-                ConfSnippet.render(bundle, password, now),
-                FilePermissions.OWNER_READ_ONLY);
+                FilePermissions.OWNER_READ_ONLY,
+                stream -> ConfSnippet.writeTo(stream, bundle, password, now));
 
         applyOwnership(nodeRoot);
 
@@ -295,6 +296,11 @@ public final class BundleWriter {
                         "--owner is only supported on file systems with POSIX ownership");
             }
             try {
+                // The tree was created by this run, but resolving through a symlink while changing
+                // ownership would hand a file outside it to the Neo4j user.
+                if (Files.isSymbolicLink(path)) {
+                    continue;
+                }
                 view.setOwner(user);
                 if (group != null) {
                     view.setGroup(group);

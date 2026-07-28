@@ -1,6 +1,8 @@
 package com.neo4j.tools.certtool.output;
 
 import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.channels.Channels;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
@@ -96,6 +98,32 @@ public final class FilePermissions {
     public static void write(Path file, String content, Set<PosixFilePermission> permissions)
             throws IOException {
         write(file, content.getBytes(StandardCharsets.UTF_8), permissions);
+    }
+
+    /** Writes content that must not be buffered in memory first, such as anything holding a secret. */
+    public interface StreamWriter {
+        void writeTo(OutputStream out) throws IOException;
+    }
+
+    /**
+     * Creates a file with the given permissions and lets {@code body} write straight into it.
+     *
+     * <p>Used where assembling the content in a {@link String} or byte array first would leave a
+     * copy of a secret on the heap that cannot be cleared.
+     */
+    public static void writeWith(
+            Path file, Set<PosixFilePermission> permissions, StreamWriter body) throws IOException {
+        Files.deleteIfExists(file);
+        try (var channel = Files.newByteChannel(
+                        file,
+                        EnumSet.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE),
+                        attributes(permissions));
+                OutputStream out = Channels.newOutputStream(channel)) {
+            body.writeTo(out);
+        }
+        if (!posixSupported()) {
+            restrictAclIfPrivate(file, permissions);
+        }
     }
 
     /** Reports the current POSIX permissions, or empty on a file system without them. */
