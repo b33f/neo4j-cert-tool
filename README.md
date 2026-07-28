@@ -143,6 +143,118 @@ To add a node to an existing `ca` cluster, bring the CA back and issue for the n
 The new node's `trusted/root-ca.crt` is byte-identical to what the existing members already hold, so
 nothing on them changes.
 
+## Changing the defaults
+
+**The defaults are the right answer for most clusters.** They are chosen to need no thought: EC
+P-256 keys, 13-month leaf certificates, a 10-year CA, all four scopes, and 600,000 PBKDF2
+iterations. If you have no specific reason to change something, don't — the quick start command is a
+complete, production-shaped invocation on its own.
+
+Everything below is for when you *do* have a reason.
+
+| Option | Default | Change it when |
+| --- | --- | --- |
+| `--key-type` | `ec-p256` | A policy mandates RSA, or a client too old for ECDSA has to connect. `ec-p384` for a higher margin; `rsa-3072` or `rsa-4096` (alias `rsa`) for compatibility. |
+| `--validity-days` | `397` | You rotate on a different cycle. Shorter is safer; longer means a lapse hurts more. Maximum 7300. |
+| `--ca-validity-days` | `3650` | Your PKI policy sets a CA lifetime. The CA should always outlive the leaves it issues. |
+| `--pbkdf2-iterations` | `600000` | Rarely. Lower only if a constrained machine takes too long to start Neo4j — the cost is paid once per key at load. Minimum 10000. |
+| `--scopes` | all four | You only need some channels encrypted, e.g. `bolt,https` for a single instance with no cluster or backup traffic. |
+| `--organisation`, `--organisational-unit`, `--country`, `--locality`, `--state` | `O=Neo4j Cluster` | Your certificates have to carry real organisational naming. `--country` takes a two-letter ISO 3166 code. |
+| `--ca-common-name`, `--intermediate-common-name` | `Neo4j Cluster Root CA`, `Neo4j Cluster Issuing CA` | The CA should be identifiable as yours in logs and trust stores. |
+
+Note that the scope name is appended to the organisational unit automatically, so a certificate is
+always identifiable by the policy it serves — `OU=Platform cluster`, `OU=Platform bolt`, and so on.
+
+An example that moves away from every relevant default — RSA keys for an old client, 90-day
+certificates, real organisational naming, and only the two client-facing scopes:
+
+```bash
+./scripts/neo4j-cert-tool \
+  --node core1:core1.example.com,10.0.0.11 \
+  --node core2:core2.example.com,10.0.0.12 \
+  --key-type rsa-3072 \
+  --validity-days 90 \
+  --ca-validity-days 1825 \
+  --scopes bolt,https \
+  --organisation "Example Ltd" \
+  --organisational-unit "Platform" \
+  --country GB \
+  --locality London \
+  --ca-common-name "Example Ltd Neo4j Root CA" \
+  --generate-password --out ./certs
+```
+
+Check what you actually got, rather than trusting the flags:
+
+```bash
+openssl x509 -in ./certs/core1/certificates/bolt/public.crt -noout -subject -dates
+# subject=C=GB, L=London, O=Example Ltd, OU=Platform bolt, CN=core1.example.com
+# notBefore=Jul 28 18:59:44 2026 GMT
+# notAfter=Oct 26 19:04:44 2026 GMT      (90 days)
+```
+
+## Using a configuration file
+
+Once a cluster has more than two or three members, or once you are overriding several defaults, put
+it in a file instead. A configuration file is reviewable, diffable and safe to commit — it contains
+no secrets, since passwords are never accepted as options.
+
+The format is deliberately dull: `key=value`, one per line, `#` for comments. **Keys are the long
+option names with the leading dashes removed.** Anything you can pass on the command line can go in
+the file, so there is nothing extra to learn. Cluster members are the one special case, written as
+`node.<name>=<addresses>`.
+
+```properties
+# cluster.properties — a three-node production cluster
+mode=ca
+key-type=ec-p256
+validity-days=397
+ca-validity-days=3650
+
+organisation=Example Ltd
+organisational-unit=Platform
+country=GB
+
+out=./certs
+generate-password=true
+
+# node.<name> = the DNS names and IP addresses peers use to reach that member.
+# Every one of these goes into the certificate's subjectAlternativeName.
+node.core1=core1.example.com,10.0.0.11
+node.core2=core2.example.com,10.0.0.12
+node.core3=core3.example.com,10.0.0.13
+```
+
+```bash
+./scripts/neo4j-cert-tool --config cluster.properties
+```
+
+Three details worth knowing:
+
+- **Flags are written `name=true`** — `generate-password=true`, `force=true`, `quiet=true` — because
+  the file has no way to express a bare flag.
+- **The command line wins.** Anything you also pass as an argument overrides the file, which makes
+  one-off variations easy without editing it:
+
+  ```bash
+  ./scripts/neo4j-cert-tool --config cluster.properties --validity-days 30 --out ./certs-short
+  ```
+
+- **`--node` is the exception: it accumulates rather than overrides.** So the file can hold the
+  cluster and the command line can add a member to it. That is how you issue for a new node from an
+  existing CA without editing the file:
+
+  ```bash
+  ./scripts/neo4j-cert-tool --config cluster.properties \
+    --node core4:core4.example.com,10.0.0.14 \
+    --ca-cert ./certs/ca/ca.crt --ca-key ./certs/ca/ca.key \
+    --out ./certs-core4
+  ```
+
+Node order in the file is preserved, so runs are reproducible. Commit the file next to your
+deployment configuration; regenerating a node months later then needs no reconstruction of which
+flags were used.
+
 ## What the certificates contain
 
 Matched to what Neo4j 2025.x requires:
