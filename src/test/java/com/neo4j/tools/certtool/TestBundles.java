@@ -208,9 +208,28 @@ final class TestBundles {
             String clientSideHostname,
             boolean requireClientCertificate)
             throws Exception {
+        return handshake(
+                serverContext,
+                clientContext,
+                InetAddress.getLoopbackAddress(),
+                clientSideHostname,
+                requireClientCertificate);
+    }
+
+    /**
+     * As {@link #handshake}, with an explicit bind address so an IPv6-only certificate can be
+     * exercised against {@code ::1}.
+     */
+    static Handshake handshake(
+            SSLContext serverContext,
+            SSLContext clientContext,
+            InetAddress bindAddress,
+            String clientSideHostname,
+            boolean requireClientCertificate)
+            throws Exception {
         try (SSLServerSocket serverSocket =
                         (SSLServerSocket) serverContext.getServerSocketFactory()
-                                .createServerSocket(0, 1, InetAddress.getLoopbackAddress());
+                                .createServerSocket(0, 1, bindAddress);
                 ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
 
             serverSocket.setNeedClientAuth(requireClientCertificate);
@@ -236,7 +255,7 @@ final class TestBundles {
             String serverSubject;
             String protocol;
             String cipherSuite;
-            try (Socket plain = new Socket(InetAddress.getLoopbackAddress(), port);
+            try (Socket plain = new Socket(bindAddress, port);
                     SSLSocket socket = (SSLSocket) clientContext.getSocketFactory()
                             .createSocket(plain, clientSideHostname, port, true)) {
                 socket.setSoTimeout(HANDSHAKE_TIMEOUT_SECONDS * 1000);
@@ -259,6 +278,9 @@ final class TestBundles {
                 cipherSuite = socket.getSession().getCipherSuite();
             }
 
+            // Only now that the client socket is closed, and its close_notify sent. The server's
+            // own close() drains input waiting for that alert, so waiting on the server here while
+            // the client socket is still open would deadlock the two sides against each other.
             String[] fromServer = serverSide.get(HANDSHAKE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             return new Handshake(serverSubject, fromServer[0], protocol, cipherSuite);
         }

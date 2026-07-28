@@ -342,20 +342,35 @@ public final class BundleVerifier {
             return;
         }
         Set<String> present = new LinkedHashSet<>();
+        Set<String> comparable = new LinkedHashSet<>();
         for (List<?> entry : names) {
             // Each entry is [type, value]; type 2 is dNSName and type 7 is iPAddress.
-            present.add(String.valueOf(entry.get(1)));
+            String value = String.valueOf(entry.get(1));
+            present.add(value);
+            comparable.add(canonicalise(value));
         }
         ok(location, "subjectAlternativeName covers " + String.join(", ", present));
 
         String commonName = commonNameOf(leaf);
-        if (commonName != null && !present.contains(commonName)) {
+        if (commonName != null && !comparable.contains(canonicalise(commonName))) {
             warning(
                     location,
                     "common name '%s' is not in the subjectAlternativeName, so clients that check "
                                     .formatted(commonName)
                             + "the SAN will not match it");
         }
+    }
+
+    /**
+     * Puts a name into a form that can be compared.
+     *
+     * <p>An address written {@code ::1} in the subject and read back from the encoded SAN as
+     * {@code 0:0:0:0:0:0:0:1} is the same address, so both sides are reduced to the JDK's canonical
+     * textual form before comparison. DNS names are compared case-insensitively.
+     */
+    private static String canonicalise(String name) {
+        java.net.InetAddress literal = com.neo4j.tools.certtool.crypto.Extensions.asIpLiteral(name);
+        return literal != null ? literal.getHostAddress() : name.toLowerCase(Locale.ROOT);
     }
 
     private void checkPrivateKey(

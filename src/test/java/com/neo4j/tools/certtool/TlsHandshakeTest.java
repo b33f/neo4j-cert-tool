@@ -91,6 +91,88 @@ class TlsHandshakeTest {
     }
 
     @Test
+    @DisplayName("an IP-only certificate passes hostname verification when connecting by address")
+    void ipOnlyCertificatesWork(@TempDir Path directory) throws Exception {
+        // A cluster addressed purely by IP, with no DNS names anywhere. Hostname verification is
+        // still on, so the address has to match an iPAddress entry in the SAN.
+        String loopback = java.net.InetAddress.getLoopbackAddress().getHostAddress();
+        TestBundles.Run run = TestBundles.generate(
+                directory,
+                "--node", "n1:" + loopback,
+                "--node", "n2:" + loopback,
+                "--scopes", "bolt,cluster");
+
+        TestBundles.Handshake bolt = TestBundles.handshake(
+                TestBundles.sslContext(run.node("n1"), Scope.BOLT),
+                TestBundles.trustOnlyContext(run.node("n1"), Scope.BOLT),
+                loopback,
+                false);
+        assertTrue(bolt.serverSubject().contains("CN=" + loopback), bolt.serverSubject());
+
+        // And mutual authentication, which is what the cluster scope needs.
+        TestBundles.Handshake cluster = TestBundles.handshake(
+                TestBundles.sslContext(run.node("n1"), Scope.CLUSTER),
+                TestBundles.sslContext(run.node("n2"), Scope.CLUSTER),
+                loopback,
+                true);
+        assertTrue(cluster.clientSubject().contains("CN=" + loopback), cluster.clientSubject());
+    }
+
+    @Test
+    @DisplayName("an IPv6-only certificate works too")
+    void ipv6OnlyCertificatesWork(@TempDir Path directory) throws Exception {
+        // Skip where the loopback interface has no IPv6 address to bind.
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+                hasIpv6Loopback(), "no IPv6 loopback available on this host");
+
+        TestBundles.Run run = TestBundles.generate(
+                directory, "--node", "n1:::1", "--scopes", "bolt");
+
+        // The certificate carries ::1; the client binds and connects on the same literal.
+        TestBundles.Handshake handshake = TestBundles.handshake(
+                TestBundles.sslContext(run.node("n1"), Scope.BOLT),
+                TestBundles.trustOnlyContext(run.node("n1"), Scope.BOLT),
+                java.net.InetAddress.getByName("::1"),
+                "::1",
+                false);
+
+        assertTrue(handshake.serverSubject().contains("CN=::1"), handshake.serverSubject());
+    }
+
+    @Test
+    @DisplayName("an IP not listed in the certificate is rejected")
+    void anUnlistedAddressIsRejected(@TempDir Path directory) throws Exception {
+        // The certificate covers 10.1.2.3 only, but the connection is to loopback, so hostname
+        // verification must fail even though the chain itself is trusted.
+        TestBundles.Run run = TestBundles.generate(
+                directory, "--node", "n1:10.1.2.3", "--scopes", "bolt");
+
+        SSLContext server = TestBundles.sslContext(run.node("n1"), Scope.BOLT);
+        SSLContext client = TestBundles.trustOnlyContext(run.node("n1"), Scope.BOLT);
+
+        assertThrows(
+                Exception.class,
+                () -> TestBundles.handshake(
+                        server,
+                        client,
+                        java.net.InetAddress.getLoopbackAddress().getHostAddress(),
+                        false));
+    }
+
+    private static boolean hasIpv6Loopback() {
+        try {
+            var loopback = java.net.NetworkInterface.getByName("lo0");
+            if (loopback == null) {
+                loopback = java.net.NetworkInterface.getByName("lo");
+            }
+            return loopback != null
+                    && loopback.inetAddresses().anyMatch(a -> a instanceof java.net.Inet6Address);
+        } catch (java.net.SocketException e) {
+            return false;
+        }
+    }
+
+    @Test
     @DisplayName("a name absent from the subjectAlternativeName is rejected")
     void anUnlistedHostnameIsRejected(@TempDir Path directory) throws Exception {
         TestBundles.Run run = TestBundles.twoNodeCluster(directory, "ca");
