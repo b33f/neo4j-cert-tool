@@ -502,8 +502,8 @@ Exit codes: `0` success, `1` failure, `2` bad usage.
 mvn verify
 ```
 
-200 tests. Alongside the unit tests for the DER encoder, PEM handling, key encryption and argument
-parsing, the suite:
+221 tests. Alongside the unit tests for the DER encoder, PEM handling, key encryption, password file
+parsing and argument parsing, the suite:
 
 - **completes real TLS handshakes** over loopback using the generated files, loading them the way
   Neo4j does — encrypted key plus password, chain from `public.crt`, trust from `trusted/` — with

@@ -7,11 +7,20 @@ updates:
       interval: weekly
     commit-message:
       prefix: ci
+    groups:
+      # One pull request for all of them rather than one each.
+      actions:
+        patterns: ['*']
 
-  # The project has no runtime dependencies; this tracks JUnit and the build plugins.
+  # The shipped jar has no dependencies at all. What this tracks is the test framework
+  # (JUnit, test scope only) and the Maven build plugins — neither is packaged, and the
+  # enforcer rule fails the build if anything ever lands in compile or runtime scope.
   - package-ecosystem: maven
     directory: /
     schedule:
       interval: weekly
     commit-message:
       prefix: build
+    groups:
+      build-and-test:
+        patterns: ['*']
