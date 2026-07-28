@@ -12,11 +12,13 @@ Runs on Linux, macOS and Windows.
 
 Example: A three-node cluster with a local CA and generated key passwords:
 
+```
 ./scripts/neo4j-cert-tool \
   --node core1:core1.example.com,10.0.0.11 \
   --node core2:core2.example.com,10.0.0.12 \
   --node core3:core3.example.com,10.0.0.13 \
-  --generate-password --out ./certs
+  --generate-password --out ./certs 
+  ```
 
 
 > Provided without warranty, and not independently audited. For production, prefer certificates from
