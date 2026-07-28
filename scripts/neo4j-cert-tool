@@ -1,0 +1,50 @@
+#!/bin/sh
+# Wrapper for neo4j-cert-tool on Linux and macOS.
+#
+# Locates the packaged jar relative to this script, picks a Java runtime, checks it is new
+# enough, and passes every argument through untouched.
+
+set -eu
+
+# Follow symlinks to the real script, so the jar is still found when this is linked onto PATH
+# (for example /usr/local/bin/neo4j-cert-tool -> /path/to/repo/scripts/neo4j-cert-tool).
+target=$0
+while [ -L "$target" ]; do
+    link=$(readlink "$target")
+    case $link in
+        /*) target=$link ;;
+        *) target=$(dirname -- "$target")/$link ;;
+    esac
+done
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$target")" && pwd)
+jar="$script_dir/../bin/neo4j-cert-tool.jar"
+
+if [ ! -f "$jar" ]; then
+    echo "neo4j-cert-tool.jar not found at $jar" >&2
+    echo "Build it first:  mvn package" >&2
+    exit 1
+fi
+
+if [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/java" ]; then
+    java_command="$JAVA_HOME/bin/java"
+elif command -v java >/dev/null 2>&1; then
+    java_command=java
+else
+    echo "No Java runtime found. Install JDK 25 or later, or set JAVA_HOME." >&2
+    exit 1
+fi
+
+# The tool is compiled for release 25. Checking here turns an UnsupportedClassVersionError,
+# which says nothing about what to do next, into a message that does.
+version=$("$java_command" -XshowSettings:properties -version 2>&1 \
+    | sed -n 's/^ *java\.specification\.version *= *\([0-9][0-9]*\).*/\1/p' \
+    | head -1)
+if [ -n "$version" ] && [ "$version" -lt 25 ]; then
+    echo "neo4j-cert-tool needs JDK 25 or later, but $java_command is Java $version." >&2
+    echo "Set JAVA_HOME to a newer JDK, or install one." >&2
+    exit 1
+fi
+
+# exec so the tool's own exit code reaches the caller: 0 success, 1 failure, 2 bad usage.
+exec "$java_command" -jar "$jar" "$@"

@@ -16,21 +16,56 @@ Runs on Linux, macOS and Windows.
 mvn package
 ```
 
-Produces `target/neo4j-cert-tool.jar`. Launchers are in `bin/` for both shells:
-
-```bash
-./bin/neo4j-cert-tool help
-```
+Produces the runnable jar at `bin/neo4j-cert-tool.jar`. Intermediate build output stays in
+`target/`; `bin/` holds only the finished jar, and `mvn clean` removes it. Both directories are
+gitignored.
 
 Building with a JDK newer than 25 is fine — `maven.compiler.release=25` compiles against the JDK 25
 API, so the result runs on any JDK 25 or later.
+
+## Running it
+
+Use the wrapper script for your platform:
+
+```bash
+./scripts/neo4j-cert-tool help          # Linux, macOS
+scripts\neo4j-cert-tool.cmd help        # Windows
+```
+
+The wrappers exist so you do not have to remember where the jar is or which JDK is on your `PATH`.
+Each one:
+
+- **finds the jar relative to itself**, so the script works from any working directory — useful for
+  cron jobs, CI steps and `sudo` invocations, where the current directory is rarely the repo. If the
+  jar is missing it says so and tells you to run `mvn package`, rather than failing with a Java
+  stack trace. The POSIX wrapper resolves symlinks first, so linking it onto your `PATH` works.
+- **picks the Java runtime** from `JAVA_HOME` if it is set, otherwise from `PATH`.
+- **checks the runtime is JDK 25 or later** (POSIX wrapper). Without that check an older JDK fails
+  with an `UnsupportedClassVersionError`, which tells you nothing about what to do; the wrapper says
+  which Java it found and what is needed instead.
+- **passes arguments through untouched** and **preserves the exit code** — `0` success, `1` failure,
+  `2` bad usage — so scripting around it behaves as expected.
+
+They are thin by design: no environment is configured and no defaults are injected, so anything the
+wrapper can do you can also do directly. If you would rather skip them entirely:
+
+```bash
+java -jar bin/neo4j-cert-tool.jar help
+```
+
+To run it from anywhere without the relative path, put the wrapper on your `PATH` — a symlink is
+fine, since it resolves the jar from its own location:
+
+```bash
+sudo ln -s "$PWD/scripts/neo4j-cert-tool" /usr/local/bin/neo4j-cert-tool
+```
 
 ## Quick start
 
 A three-node cluster with a local CA and generated key passwords:
 
 ```bash
-./bin/neo4j-cert-tool \
+./scripts/neo4j-cert-tool \
   --node core1:core1.example.com,10.0.0.11 \
   --node core2:core2.example.com,10.0.0.12 \
   --node core3:core3.example.com,10.0.0.13 \
@@ -62,14 +97,14 @@ ssh core1.example.com 'chown -R neo4j:neo4j /var/lib/neo4j/certificates'
 Or, on the machine you are running on, let the tool do it:
 
 ```bash
-./bin/neo4j-cert-tool --node core1:core1.example.com,10.0.0.11 \
+./scripts/neo4j-cert-tool --node core1:core1.example.com,10.0.0.11 \
   --generate-password --install --neo4j-home /var/lib/neo4j --owner neo4j:neo4j
 ```
 
 Confirm the result at any point:
 
 ```bash
-./bin/neo4j-cert-tool verify --out ./certs
+./scripts/neo4j-cert-tool verify --out ./certs
 ```
 
 `help` documents every option. Run it first — it includes guidance on choosing a trust mode, which
@@ -86,7 +121,7 @@ is the one decision worth thinking about.
 To add a node to an existing `ca` cluster, bring the CA back and issue for the new node alone:
 
 ```bash
-./bin/neo4j-cert-tool --node core4:core4.example.com,10.0.0.14 \
+./scripts/neo4j-cert-tool --node core4:core4.example.com,10.0.0.14 \
   --ca-cert ./certs/ca/ca.crt --ca-key ./certs/ca/ca.key \
   --generate-password --out ./certs-core4
 ```
@@ -219,6 +254,10 @@ Two notes on JDK behaviour the tests pin down:
 ## Layout
 
 ```
+scripts/neo4j-cert-tool     wrapper for Linux and macOS
+scripts/neo4j-cert-tool.cmd wrapper for Windows
+bin/neo4j-cert-tool.jar     the built tool (generated, gitignored)
+
 src/main/java/com/neo4j/tools/certtool/
   Main.java                 entry point, exit codes, run summary
   Cli.java, Options.java    argument and configuration file parsing

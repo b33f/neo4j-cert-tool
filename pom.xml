@@ -63,6 +63,12 @@
         <artifactId>maven-jar-plugin</artifactId>
         <version>3.4.2</version>
         <configuration>
+          <!--
+            The runnable jar lands in bin/ rather than target/, so the built tool sits in a
+            predictable place. Intermediate build output stays in target/, and bin/ is
+            gitignored because its only contents are generated.
+          -->
+          <outputDirectory>${project.basedir}/bin</outputDirectory>
           <archive>
             <manifest>
               <mainClass>com.neo4j.tools.certtool.Main</mainClass>
@@ -71,6 +77,27 @@
               <Implementation-Version>${project.version}</Implementation-Version>
             </manifestEntries>
           </archive>
+        </configuration>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-clean-plugin</artifactId>
+        <version>3.4.0</version>
+        <configuration>
+          <!--
+            'mvn clean' only knows about target/, so the jar in bin/ has to be listed
+            explicitly or a stale build would survive a clean. Restricted to *.jar so
+            nothing else that ends up in bin/ is removed.
+          -->
+          <filesets>
+            <fileset>
+              <directory>${project.basedir}/bin</directory>
+              <includes>
+                <include>*.jar</include>
+              </includes>
+            </fileset>
+          </filesets>
         </configuration>
       </plugin>
 
