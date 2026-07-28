@@ -28,14 +28,14 @@ jobs:
 
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.ref }}
           # The commit date is used as the build timestamp, so history is needed.
           fetch-depth: 0
 
       - name: Set up JDK 25
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           # Built on the oldest supported JDK, so the artifact cannot accidentally depend on
@@ -111,7 +111,7 @@ jobs:
       - name: Attest build provenance
         # Records where and how these files were built, so consumers can verify their origin
         # with: gh attestation verify <file> --repo ${{ github.repository }}
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             dist/neo4j-cert-tool-*.jar
