@@ -10,7 +10,7 @@ runtime scope.
 
 Runs on Linux, macOS and Windows.
 
-Example: A three-node cluster with a local CA and generated key passwords:
+Example of creating certs for a three-node cluster with a local CA and generated key passwords:
 
 ```
 ./scripts/neo4j-cert-tool \
@@ -23,148 +23,6 @@ Example: A three-node cluster with a local CA and generated key passwords:
 
 > Provided without warranty, and not independently audited. For production, prefer certificates from
 > a real certificate authority — see [Security design, and its limits](#security-design-and-its-limits).
-
-## Prerequisites
-
-| Tool | Needed for | Version |
-| --- | --- | --- |
-| JDK | building and running | 25 or later |
-| Maven | building only | 3.9 or later |
-
-That is the whole list. The tool has no third-party runtime dependencies, so there is nothing to
-install alongside it. Maven downloads JUnit and the build plugins on the first build, which needs
-network access once; after that `mvn -o verify` works offline. If someone hands you a built
-`neo4j-cert-tool.jar`, you only need the JDK.
-
-The project sets `maven.compiler.release=25`, so a newer JDK builds it fine and the result still runs
-on 25 — the class files are version 69 either way. Built and tested on JDK 25.0.4 and 26.0.1.
-
-### macOS
-
-```bash
-brew install openjdk@25 maven
-```
-
-Homebrew keeps versioned JDKs out of the way ("keg-only"), so link it where macOS looks for JDKs and
-point `JAVA_HOME` at it:
-
-```bash
-sudo ln -sfn "$(brew --prefix openjdk@25)/libexec/openjdk.jdk" \
-  /Library/Java/JavaVirtualMachines/openjdk-25.jdk
-export JAVA_HOME=$(/usr/libexec/java_home -v 25)
-```
-
-Add the `export` to `~/.zshrc` to make it stick. Without the symlink, `/usr/libexec/java_home` — and
-so anything relying on it — will not see the JDK at all.
-
-### Linux
-
-**Ubuntu / Debian.** `openjdk-25-jdk` is in the archive for 22.04 and later, and is the default JDK
-from 26.04:
-
-```bash
-sudo apt update
-sudo apt install openjdk-25-jdk maven
-```
-
-**Fedora / RHEL / Rocky / Alma.** Package names track the version, so check what your release
-carries before installing:
-
-```bash
-dnf search openjdk | grep 25
-sudo dnf install java-25-openjdk-devel maven
-```
-
-**Any distribution whose packaged JDK is too old.** The Eclipse Adoptium repository carries every
-LTS, including 25:
-
-```bash
-# Debian / Ubuntu
-sudo apt install -y wget apt-transport-https gpg
-wget -qO - https://packages.adoptium.net/artifactory/api/gpg/key/public \
-  | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/adoptium.gpg > /dev/null
-echo "deb https://packages.adoptium.net/artifactory/deb $(awk -F= '/^VERSION_CODENAME/{print$2}' /etc/os-release) main" \
-  | sudo tee /etc/apt/sources.list.d/adoptium.list
-sudo apt update
-sudo apt install temurin-25-jdk
-```
-
-```bash
-# Fedora / RHEL — note 'sudo tee', not 'sudo cat > file', which would write as your own user
-sudo tee /etc/yum.repos.d/adoptium.repo > /dev/null <<EOF
-[Adoptium]
-name=Adoptium
-baseurl=https://packages.adoptium.net/artifactory/rpm/$(. /etc/os-release; echo $ID)/\$releasever/\$basearch
-enabled=1
-gpgcheck=1
-gpgkey=https://packages.adoptium.net/artifactory/api/gpg/key/public
-EOF
-sudo dnf install temurin-25-jdk
-```
-
-With more than one JDK installed, choose the default with `sudo update-alternatives --config java`
-(Debian, Ubuntu) or `sudo alternatives --config java` (Fedora, RHEL). Maven uses `JAVA_HOME` when it
-is set, and otherwise whatever `java` resolves to.
-
-### Windows
-
-The JDK is in the winget catalogue:
-
-```powershell
-winget install EclipseAdoptium.Temurin.25.JDK
-```
-
-The Temurin installer can set `JAVA_HOME` for you if you enable that feature during setup. To set it
-afterwards, find the install directory first, since it includes the patch version:
-
-```powershell
-Get-ChildItem "C:\Program Files\Eclipse Adoptium"
-setx JAVA_HOME "C:\Program Files\Eclipse Adoptium\jdk-25.x.y.z-hotspot"
-```
-
-Maven is **not** in the official winget catalogue, so use Chocolatey or Scoop:
-
-```powershell
-choco install maven
-# or
-scoop install maven
-```
-
-Failing that, install it by hand: download the binary zip from
-[maven.apache.org](https://maven.apache.org/download.cgi), extract it, and add its `bin` directory to
-`PATH`. Open a new terminal afterwards so the environment changes take effect.
-
-### Alternative: SDKMAN (macOS, Linux, WSL)
-
-[SDKMAN](https://sdkman.io) manages several JDKs side by side without touching system packages —
-handy if you need to keep an older JDK for other work. It needs a POSIX shell, so on Windows it
-works under WSL or Git Bash rather than in `cmd` or PowerShell:
-
-```bash
-curl -s "https://get.sdkman.io" | bash
-source "$HOME/.sdkman/bin/sdkman-init.sh"
-sdk list java | grep tem     # find the current Temurin 25 build
-sdk install java 25.0.4-tem  # patch versions move; use what the list shows
-sdk install maven
-```
-
-### Check the toolchain
-
-```bash
-java -version
-mvn -v
-```
-
-`mvn -v` is the one that matters. It prints the JDK Maven has actually picked — `JAVA_HOME` if set,
-which may differ from whatever `java` on your `PATH` resolves to. If it reports Java 24 or older the
-build fails at `--release 25`, with an error about the release version rather than anything about
-this project.
-
-Then prove the whole toolchain works. This compiles the tool and runs the full test suite:
-
-```bash
-mvn verify
-```
 
 ## Build
 
@@ -506,6 +364,149 @@ The same checks run automatically at the end of every `generate` run. If they fa
 non-zero and tells you not to distribute the output.
 
 Exit codes: `0` success, `1` failure, `2` bad usage.
+
+## Prerequisites
+
+| Tool | Needed for | Version |
+| --- | --- | --- |
+| JDK | building and running | 25 or later |
+| Maven | building only | 3.9 or later |
+
+That is the whole list. The tool has no third-party runtime dependencies, so there is nothing to
+install alongside it. Maven downloads JUnit and the build plugins on the first build, which needs
+network access once; after that `mvn -o verify` works offline. If someone hands you a built
+`neo4j-cert-tool.jar`, you only need the JDK.
+
+The project sets `maven.compiler.release=25`, so a newer JDK builds it fine and the result still runs
+on 25 — the class files are version 69 either way. Built and tested on JDK 25.0.4 and 26.0.1.
+
+### macOS
+
+```bash
+brew install openjdk@25 maven
+```
+
+Homebrew keeps versioned JDKs out of the way ("keg-only"), so link it where macOS looks for JDKs and
+point `JAVA_HOME` at it:
+
+```bash
+sudo ln -sfn "$(brew --prefix openjdk@25)/libexec/openjdk.jdk" \
+  /Library/Java/JavaVirtualMachines/openjdk-25.jdk
+export JAVA_HOME=$(/usr/libexec/java_home -v 25)
+```
+
+Add the `export` to `~/.zshrc` to make it stick. Without the symlink, `/usr/libexec/java_home` — and
+so anything relying on it — will not see the JDK at all.
+
+### Linux
+
+**Ubuntu / Debian.** `openjdk-25-jdk` is in the archive for 22.04 and later, and is the default JDK
+from 26.04:
+
+```bash
+sudo apt update
+sudo apt install openjdk-25-jdk maven
+```
+
+**Fedora / RHEL / Rocky / Alma.** Package names track the version, so check what your release
+carries before installing:
+
+```bash
+dnf search openjdk | grep 25
+sudo dnf install java-25-openjdk-devel maven
+```
+
+**Any distribution whose packaged JDK is too old.** The Eclipse Adoptium repository carries every
+LTS, including 25:
+
+```bash
+# Debian / Ubuntu
+sudo apt install -y wget apt-transport-https gpg
+wget -qO - https://packages.adoptium.net/artifactory/api/gpg/key/public \
+  | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/adoptium.gpg > /dev/null
+echo "deb https://packages.adoptium.net/artifactory/deb $(awk -F= '/^VERSION_CODENAME/{print$2}' /etc/os-release) main" \
+  | sudo tee /etc/apt/sources.list.d/adoptium.list
+sudo apt update
+sudo apt install temurin-25-jdk
+```
+
+```bash
+# Fedora / RHEL — note 'sudo tee', not 'sudo cat > file', which would write as your own user
+sudo tee /etc/yum.repos.d/adoptium.repo > /dev/null <<EOF
+[Adoptium]
+name=Adoptium
+baseurl=https://packages.adoptium.net/artifactory/rpm/$(. /etc/os-release; echo $ID)/\$releasever/\$basearch
+enabled=1
+gpgcheck=1
+gpgkey=https://packages.adoptium.net/artifactory/api/gpg/key/public
+EOF
+sudo dnf install temurin-25-jdk
+```
+
+With more than one JDK installed, choose the default with `sudo update-alternatives --config java`
+(Debian, Ubuntu) or `sudo alternatives --config java` (Fedora, RHEL). Maven uses `JAVA_HOME` when it
+is set, and otherwise whatever `java` resolves to.
+
+### Windows
+
+The JDK is in the winget catalogue:
+
+```powershell
+winget install EclipseAdoptium.Temurin.25.JDK
+```
+
+The Temurin installer can set `JAVA_HOME` for you if you enable that feature during setup. To set it
+afterwards, find the install directory first, since it includes the patch version:
+
+```powershell
+Get-ChildItem "C:\Program Files\Eclipse Adoptium"
+setx JAVA_HOME "C:\Program Files\Eclipse Adoptium\jdk-25.x.y.z-hotspot"
+```
+
+Maven is **not** in the official winget catalogue, so use Chocolatey or Scoop:
+
+```powershell
+choco install maven
+# or
+scoop install maven
+```
+
+Failing that, install it by hand: download the binary zip from
+[maven.apache.org](https://maven.apache.org/download.cgi), extract it, and add its `bin` directory to
+`PATH`. Open a new terminal afterwards so the environment changes take effect.
+
+### Alternative: SDKMAN (macOS, Linux, WSL)
+
+[SDKMAN](https://sdkman.io) manages several JDKs side by side without touching system packages —
+handy if you need to keep an older JDK for other work. It needs a POSIX shell, so on Windows it
+works under WSL or Git Bash rather than in `cmd` or PowerShell:
+
+```bash
+curl -s "https://get.sdkman.io" | bash
+source "$HOME/.sdkman/bin/sdkman-init.sh"
+sdk list java | grep tem     # find the current Temurin 25 build
+sdk install java 25.0.4-tem  # patch versions move; use what the list shows
+sdk install maven
+```
+
+### Check the toolchain
+
+```bash
+java -version
+mvn -v
+```
+
+`mvn -v` is the one that matters. It prints the JDK Maven has actually picked — `JAVA_HOME` if set,
+which may differ from whatever `java` on your `PATH` resolves to. If it reports Java 24 or older the
+build fails at `--release 25`, with an error about the release version rather than anything about
+this project.
+
+Then prove the whole toolchain works. This compiles the tool and runs the full test suite:
+
+```bash
+mvn verify
+```
+
 
 ## Tests
 
