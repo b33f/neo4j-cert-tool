@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Lets the release workflow require exactly these checks before it publishes anything.
+  workflow_call:
+  workflow_dispatch:
+
+# Least privilege: building and testing only needs to read the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.os }} / JDK ${{ matrix.java }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Report every failing combination, not just the first one.
+      fail-fast: false
+      matrix:
+        # The tool claims Linux, macOS and Windows support, so all three are tested. Windows is
+        # where the owner-only ACL fallback runs instead of POSIX mode bits.
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        # 25 is the minimum supported release; 26 catches anything the next JDK breaks.
+        java: ['25', '26']
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ matrix.java }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          cache: maven
+
+      - name: Build and test
+        run: mvn --batch-mode --no-transfer-progress verify
+
+      - name: Generate and verify a bundle on a real filesystem
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The test suite skips POSIX permission assertions where they do not apply, so this
+          # exercises the whole tool against whatever the runner's filesystem actually is.
+          printf 'ci-smoke-test-password\n' > pw.txt
+          chmod 600 pw.txt || true
+          java -jar bin/neo4j-cert-tool.jar \
+            --node n1:n1.example.com,127.0.0.1 \
+            --node n2:n2.example.com,127.0.0.1 \
+            --out ./ci-out \
+            --password-file pw.txt \
+            --pbkdf2-iterations 10000
+          java -jar bin/neo4j-cert-tool.jar verify --out ./ci-out --password-file pw.txt
+
+      - name: Upload test reports
+        # Only useful when something failed, and keeps successful runs cheap.
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-${{ matrix.os }}-jdk${{ matrix.java }}
+          path: target/surefire-reports/
+          retention-days: 7

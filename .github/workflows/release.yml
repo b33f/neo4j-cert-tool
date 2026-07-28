@@ -1,0 +1,133 @@
+name: Release
+
+on:
+  push:
+    # Any tag of the form v1.2.3, or v1.2.3-rc1 for a prerelease.
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: An existing tag to release, for example v1.0.0
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Publish nothing that has not passed the full cross-platform matrix first.
+  verify:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release and upload its assets
+      id-token: write # sign the build provenance attestation
+      attestations: write # record the attestation against the repository
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          # The commit date is used as the build timestamp, so history is needed.
+          fetch-depth: 0
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          # Built on the oldest supported JDK, so the artifact cannot accidentally depend on
+          # anything newer than it claims to.
+          java-version: '25'
+          cache: maven
+
+      - name: Resolve the version and check it against pom.xml
+        id: version
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          POM_VERSION=$(mvn --batch-mode --quiet help:evaluate \
+            -Dexpression=project.version -DforceStdout)
+
+          if [ "$VERSION" != "$POM_VERSION" ]; then
+            echo "::error::Tag $TAG implies version $VERSION, but pom.xml says $POM_VERSION."
+            echo "Bump <version> in pom.xml, commit that, then tag the commit."
+            exit 1
+          fi
+
+          # A version with a suffix (1.0.0-rc1) is published as a prerelease.
+          PRERELEASE=""
+          case "$VERSION" in *-*) PRERELEASE="--prerelease" ;; esac
+
+          {
+            echo "tag=$TAG"
+            echo "version=$VERSION"
+            echo "prerelease=$PRERELEASE"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and test
+        run: |
+          set -euo pipefail
+          # Fixing the archive timestamps to the commit date makes the jar byte-for-byte
+          # reproducible for anyone rebuilding this tag with the same JDK and Maven.
+          mvn --batch-mode --no-transfer-progress \
+            -Dproject.build.outputTimestamp="$(git log -1 --pretty=%cI)" \
+            verify
+
+      - name: Assemble the release assets
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          STAGE="neo4j-cert-tool-$VERSION"
+
+          mkdir -p "dist/$STAGE/bin" "dist/$STAGE/scripts"
+          cp bin/neo4j-cert-tool.jar "dist/$STAGE/bin/"
+          cp scripts/neo4j-cert-tool scripts/neo4j-cert-tool.cmd "dist/$STAGE/scripts/"
+          cp README.md LICENSE "dist/$STAGE/"
+
+          # A ready-to-run bundle: jar plus wrappers, laid out as the wrappers expect.
+          (cd dist && zip -qr "$STAGE.zip" "$STAGE")
+          # And the bare jar, for anyone who only wants that.
+          cp bin/neo4j-cert-tool.jar "dist/$STAGE.jar"
+
+          (cd dist && sha256sum "$STAGE.jar" "$STAGE.zip" > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+
+      - name: Confirm the packaged jar runs and reports the right version
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          REPORTED=$(java -jar "dist/neo4j-cert-tool-$VERSION.jar" version | head -1)
+          echo "$REPORTED"
+          # Guards against shipping a jar whose manifest version does not match the tag.
+          case "$REPORTED" in
+            *"$VERSION"*) ;;
+            *) echo "::error::Packaged jar reports '$REPORTED', expected version $VERSION"; exit 1 ;;
+          esac
+
+      - name: Attest build provenance
+        # Records where and how these files were built, so consumers can verify their origin
+        # with: gh attestation verify <file> --repo ${{ github.repository }}
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/neo4j-cert-tool-*.jar
+            dist/neo4j-cert-tool-*.zip
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title "neo4j-cert-tool $VERSION" \
+            --generate-notes \
+            --verify-tag \
+            ${{ steps.version.outputs.prerelease }} \
+            "dist/neo4j-cert-tool-$VERSION.jar" \
+            "dist/neo4j-cert-tool-$VERSION.zip" \
+            dist/SHA256SUMS.txt

@@ -393,9 +393,74 @@ Two notes on JDK behaviour the tests pin down:
   `--enable-preview` on every user at both compile and run time. PEM is a base64 body between two
   label lines, so `Pem` writes it directly.
 
+## Continuous integration and releases
+
+Two GitHub Actions workflows, both in `.github/workflows/`.
+
+**CI** (`ci.yml`) runs on every push to `main`, every pull request, and on demand. It builds and runs
+the full test suite across six combinations — Linux, macOS and Windows against JDK 25 and 26 — and
+then generates and verifies a real bundle on each runner. That last step matters: the POSIX
+permission assertions skip themselves on Windows, so without it the owner-only ACL fallback would
+never be exercised anywhere.
+
+**Release** (`release.yml`) runs when you push a tag matching `v*`. It calls the CI workflow first
+and publishes nothing unless all six legs pass.
+
+### Cutting a release
+
+The version in `pom.xml` is the single source of truth, and the tag must agree with it. So:
+
+```bash
+# 1. bump the version, commit it
+mvn versions:set -DnewVersion=1.1.0 -DgenerateBackupPoms=false
+git commit -am "Release 1.1.0"
+
+# 2. tag that commit and push
+git tag v1.1.0
+git push origin main v1.1.0
+```
+
+If the tag and `pom.xml` disagree the release fails immediately with a message saying so, rather
+than publishing a jar whose `version` command reports something else. A tag with a suffix —
+`v1.1.0-rc1` — is published as a prerelease automatically.
+
+To re-run a release for a tag that already exists, use the workflow's manual trigger and give it the
+tag name.
+
+### What a release contains
+
+| Asset | Contents |
+| --- | --- |
+| `neo4j-cert-tool-<version>.jar` | the runnable jar on its own |
+| `neo4j-cert-tool-<version>.zip` | jar plus both wrapper scripts, laid out as the wrappers expect, with README and LICENSE |
+| `SHA256SUMS.txt` | checksums for both |
+
+Release notes are generated from the commits since the previous tag.
+
+### Verifying a download
+
+Check the checksum:
+
+```bash
+sha256sum -c SHA256SUMS.txt
+```
+
+Every release asset also carries a signed build provenance attestation, which proves it was built by
+this repository's workflow from a specific commit rather than uploaded by hand:
+
+```bash
+gh attestation verify neo4j-cert-tool-1.1.0.jar --repo <owner>/neo4j-cert-tool
+```
+
+Releases are built with `-Dproject.build.outputTimestamp` set to the tagged commit's date, so the jar
+is byte-for-byte reproducible: rebuilding the same tag with the same JDK and Maven version yields an
+identical checksum. Differing JDK or Maven versions may still produce a different jar.
+
 ## Layout
 
 ```
+.github/workflows/ci.yml      build and test matrix
+.github/workflows/release.yml tag-driven versioned release
 scripts/neo4j-cert-tool     wrapper for Linux and macOS
 scripts/neo4j-cert-tool.cmd wrapper for Windows
 bin/neo4j-cert-tool.jar     the built tool (generated, gitignored)
