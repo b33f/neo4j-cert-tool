@@ -111,7 +111,7 @@ jobs:
       - name: Attest build provenance
         # Records where and how these files were built, so consumers can verify their origin
         # with: gh attestation verify <file> --repo ${{ github.repository }}
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             dist/neo4j-cert-tool-*.jar
