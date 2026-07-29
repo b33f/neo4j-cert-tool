@@ -3,7 +3,7 @@
 Generates TLS certificates for a Neo4j 2025.x or 2026.x cluster, in the layout and format the database
 expects, with encrypted private keys and the file permissions Neo4j documents.
 
-Written against **JDK 25 LTS** with **no third-party dependencies at runtime** — X.509 encoding,
+Written for **JDK 21 LTS and later** with **no third-party dependencies at runtime** — X.509 encoding,
 key generation, PKCS#8 encryption and filesystem permissions are all done through the JDK. JUnit is
 a test-scope dependency only, and the build fails if anything is ever added to the compile or
 runtime scope.
@@ -34,8 +34,8 @@ Produces the runnable jar at `bin/neo4j-cert-tool.jar`. Intermediate build outpu
 `target/`; `bin/` holds only the finished jar, and `mvn clean` removes it. Both directories are
 gitignored.
 
-Building with a JDK newer than 25 is fine — `maven.compiler.release=25` compiles against the JDK 25
-API, so the result runs on any JDK 25 or later.
+Building with a newer JDK is fine — `maven.compiler.release=21` compiles against the JDK 21 API, so
+the result runs on any JDK 21 or later regardless of which JDK built it.
 
 ## Running it
 
@@ -54,7 +54,7 @@ Each one:
   jar is missing it says so and tells you to run `mvn package`, rather than failing with a Java
   stack trace. The POSIX wrapper resolves symlinks first, so linking it onto your `PATH` works.
 - **picks the Java runtime** from `JAVA_HOME` if it is set, otherwise from `PATH`.
-- **checks the runtime is JDK 25 or later** (POSIX wrapper). Without that check an older JDK fails
+- **checks the runtime is JDK 21 or later** (POSIX wrapper). Without that check an older JDK fails
   with an `UnsupportedClassVersionError`, which tells you nothing about what to do; the wrapper says
   which Java it found and what is needed instead.
 - **passes arguments through untouched** and **preserves the exit code** — `0` success, `1` failure,
@@ -457,8 +457,9 @@ X.509 structure that wraps the JDK's output:
 | X.509 v3 certificate assembly (`X509Builder`) | The JDK has no public certificate builder; `sun.security.x509` is internal and would need `--add-exports` |
 | Extension encoding (`Extensions`) — basicConstraints, keyUsage, extendedKeyUsage, subjectAltName, subject and authority key identifiers | Same reason |
 | Distinguished name encoding (`DistinguishedName`) | Same reason |
-| PEM framing (`Pem`) — labels and line wrapping around JDK Base64 | JDK 25's `PEMEncoder` is a preview API and would force `--enable-preview` on every user |
+| PEM framing (`Pem`) — labels and line wrapping around JDK Base64 | `PEMEncoder` does not exist before JDK 25, and is only a preview API there, which would force `--enable-preview` on every user |
 | The `EncryptedPrivateKeyInfo` envelope (`Pkcs8`) | The JDK's own constructor silently drops the PBKDF2 PRF, producing a key nothing can decrypt. The ciphertext, salt, IV and derived key are all still the JDK's; only the ASN.1 wrapper around them is ours |
+| IP literal parsing (`Extensions.parseIpLiteral`) | `InetAddress.ofLiteral` only exists from JDK 22, and this tool supports 21. `getByName` cannot be substituted: it resolves hostnames, so classification would make DNS requests and a resolvable hostname would be encoded as an `iPAddress`. See below |
 
 **Where the risk actually sits.** A mistake in the hand-written code usually fails loudly: a
 malformed certificate will not parse, and a broken chain will not validate. Every certificate is
@@ -471,7 +472,18 @@ The exception worth naming is **extension content**. A wrong `keyUsage` bit, a m
 flag, or a `basicConstraints` that failed to mark a leaf as a non-CA would be a security defect
 rather than a parse error, and would not necessarily be loud — a certificate can be perfectly valid
 and still grant more than it should. That is why those specific fields carry the heaviest test
-coverage, asserted for every scope individually. The test suite does not shell out to OpenSSL;
+coverage, asserted for every scope individually.
+
+**IP literal parsing** is the other place worth naming, because it decides whether a name is encoded
+as an `iPAddress` or a `dNSName`, and a wrong answer either fails verification or certifies an
+address nobody asked for. The parser was differential-tested against `InetAddress.ofLiteral` on a JDK
+that has it: 59 of 65 corpus entries agree, and it is deliberately stricter on the other six. It
+refuses the legacy `1.2.3` form (which the JDK reads as `1.2.0.3`), refuses leading zeros such as
+`010.1.1.1` (read as decimal by the JDK but as octal by some resolvers, so the same certificate would
+mean different addresses to different readers), and refuses a zone identifier like `fe80::1%en0`
+rather than silently dropping it. Anything refused is then validated as a DNS name, so it fails with
+a message instead of being quietly reinterpreted. An IPv4-mapped address such as `::ffff:10.0.0.11`
+is collapsed to four octets, matching the JDK, so that a peer connecting over IPv4 can match it. The test suite does not shell out to OpenSSL;
 generated certificates were cross-checked by hand with `openssl x509 -text` and `openssl verify`
 during development, and repeating that after any change to the extension code is worthwhile.
 
@@ -544,7 +556,7 @@ Exit codes: `0` success, `1` failure, `2` bad usage.
 
 | Tool | Needed for | Version |
 | --- | --- | --- |
-| JDK | building and running | 25 or later |
+| JDK | building and running | 21 or later |
 | Maven | building only | 3.9 or later |
 
 That is the whole list. The tool has no third-party runtime dependencies, so there is nothing to
@@ -552,22 +564,24 @@ install alongside it. Maven downloads JUnit and the build plugins on the first b
 network access once; after that `mvn -o verify` works offline. If someone hands you a built
 `neo4j-cert-tool.jar`, you only need the JDK.
 
-The project sets `maven.compiler.release=25`, so a newer JDK builds it fine and the result still runs
-on 25 — the class files are version 69 either way. Built and tested on JDK 25.0.4 and 26.0.1.
+The project sets `maven.compiler.release=21`, so a newer JDK builds it fine and the result still runs
+on 21 — the class files are version 65 either way. Built and tested here on JDK 21.0.12 and 25.0.4;
+CI additionally covers 26. The examples below install 21, the minimum; any later JDK works, so
+substitute 25 if you would rather run the current LTS.
 
 ### macOS
 
 ```bash
-brew install openjdk@25 maven
+brew install openjdk@21 maven
 ```
 
 Homebrew keeps versioned JDKs out of the way ("keg-only"), so link it where macOS looks for JDKs and
 point `JAVA_HOME` at it:
 
 ```bash
-sudo ln -sfn "$(brew --prefix openjdk@25)/libexec/openjdk.jdk" \
-  /Library/Java/JavaVirtualMachines/openjdk-25.jdk
-export JAVA_HOME=$(/usr/libexec/java_home -v 25)
+sudo ln -sfn "$(brew --prefix openjdk@21)/libexec/openjdk.jdk" \
+  /Library/Java/JavaVirtualMachines/openjdk-21.jdk
+export JAVA_HOME=$(/usr/libexec/java_home -v 21)
 ```
 
 Add the `export` to `~/.zshrc` to make it stick. Without the symlink, `/usr/libexec/java_home` — and
@@ -575,24 +589,24 @@ so anything relying on it — will not see the JDK at all.
 
 ### Linux
 
-**Ubuntu / Debian.** `openjdk-25-jdk` is in the archive for 22.04 and later, and is the default JDK
-from 26.04:
+**Ubuntu / Debian.** `openjdk-21-jdk` is in the archive for 22.04 and later, and is the default JDK
+in 24.04:
 
 ```bash
 sudo apt update
-sudo apt install openjdk-25-jdk maven
+sudo apt install openjdk-21-jdk maven
 ```
 
 **Fedora / RHEL / Rocky / Alma.** Package names track the version, so check what your release
 carries before installing:
 
 ```bash
-dnf search openjdk | grep 25
-sudo dnf install java-25-openjdk-devel maven
+dnf search openjdk | grep 21
+sudo dnf install java-21-openjdk-devel maven
 ```
 
 **Any distribution whose packaged JDK is too old.** The Eclipse Adoptium repository carries every
-LTS, including 25:
+LTS, including 21 and 25:
 
 ```bash
 # Debian / Ubuntu
@@ -602,7 +616,7 @@ wget -qO - https://packages.adoptium.net/artifactory/api/gpg/key/public \
 echo "deb https://packages.adoptium.net/artifactory/deb $(awk -F= '/^VERSION_CODENAME/{print$2}' /etc/os-release) main" \
   | sudo tee /etc/apt/sources.list.d/adoptium.list
 sudo apt update
-sudo apt install temurin-25-jdk
+sudo apt install temurin-21-jdk
 ```
 
 ```bash
@@ -615,7 +629,7 @@ enabled=1
 gpgcheck=1
 gpgkey=https://packages.adoptium.net/artifactory/api/gpg/key/public
 EOF
-sudo dnf install temurin-25-jdk
+sudo dnf install temurin-21-jdk
 ```
 
 With more than one JDK installed, choose the default with `sudo update-alternatives --config java`
@@ -627,7 +641,7 @@ is set, and otherwise whatever `java` resolves to.
 The JDK is in the winget catalogue:
 
 ```powershell
-winget install EclipseAdoptium.Temurin.25.JDK
+winget install EclipseAdoptium.Temurin.21.JDK
 ```
 
 The Temurin installer can set `JAVA_HOME` for you if you enable that feature during setup. To set it
@@ -635,7 +649,7 @@ afterwards, find the install directory first, since it includes the patch versio
 
 ```powershell
 Get-ChildItem "C:\Program Files\Eclipse Adoptium"
-setx JAVA_HOME "C:\Program Files\Eclipse Adoptium\jdk-25.x.y.z-hotspot"
+setx JAVA_HOME "C:\Program Files\Eclipse Adoptium\jdk-21.x.y.z-hotspot"
 ```
 
 Maven is **not** in the official winget catalogue, so use Chocolatey or Scoop:
@@ -659,8 +673,8 @@ works under WSL or Git Bash rather than in `cmd` or PowerShell:
 ```bash
 curl -s "https://get.sdkman.io" | bash
 source "$HOME/.sdkman/bin/sdkman-init.sh"
-sdk list java | grep tem     # find the current Temurin 25 build
-sdk install java 25.0.4-tem  # patch versions move; use what the list shows
+sdk list java | grep tem      # find the current Temurin 21 build
+sdk install java 21.0.12-tem  # patch versions move; use what the list shows
 sdk install maven
 ```
 
@@ -673,7 +687,7 @@ mvn -v
 
 `mvn -v` is the one that matters. It prints the JDK Maven has actually picked — `JAVA_HOME` if set,
 which may differ from whatever `java` on your `PATH` resolves to. If it reports Java 24 or older the
-build fails at `--release 25`, with an error about the release version rather than anything about
+build fails at `--release 21`, with an error about the release version rather than anything about
 this project.
 
 Then prove the whole toolchain works. This compiles the tool and runs the full test suite:
@@ -689,7 +703,7 @@ mvn verify
 mvn verify
 ```
 
-221 tests. Alongside the unit tests for the DER encoder, PEM handling, key encryption, password file
+301 tests. Alongside the unit tests for the DER encoder, PEM handling, key encryption, password file
 parsing and argument parsing, the suite:
 
 - **completes real TLS handshakes** over loopback using the generated files, loading them the way
@@ -712,22 +726,22 @@ Two notes on JDK behaviour the tests pin down:
   maps the parameters through a generic `PBES2` implementation that drops the PRF, so the file
   decodes as PBKDF2's default HMAC-SHA1 and cannot be decrypted by anything — including OpenSSL.
   `Pkcs8` wraps the cipher's untouched parameter encoding instead.
-- `PEMEncoder`/`PEMDecoder` (JEP 470) are preview APIs in JDK 25, which would force
-  `--enable-preview` on every user at both compile and run time. PEM is a base64 body between two
-  label lines, so `Pem` writes it directly.
+- `PEMEncoder`/`PEMDecoder` (JEP 470) do not exist before JDK 25 and are only preview APIs there,
+  so using them would both raise the baseline and force `--enable-preview` on every user. PEM is a
+  base64 body between two label lines, so `Pem` writes it directly.
 
 ## Continuous integration and releases
 
 Two GitHub Actions workflows, both in `.github/workflows/`.
 
 **CI** (`ci.yml`) runs on every push to `main`, every pull request, and on demand. It builds and runs
-the full test suite across six combinations — Linux, macOS and Windows against JDK 25 and 26 — and
-then generates and verifies a real bundle on each runner. That last step matters: the POSIX
+the full test suite across nine combinations — Linux, macOS and Windows against JDK 21, 25 and 26 —
+and then generates and verifies a real bundle on each runner. That last step matters: the POSIX
 permission assertions skip themselves on Windows, so without it the owner-only ACL fallback would
 never be exercised anywhere.
 
 **Release** (`release.yml`) runs when you push a tag matching `v*`. It calls the CI workflow first
-and publishes nothing unless all six legs pass.
+and publishes nothing unless all nine legs pass.
 
 ### Cutting a release
 

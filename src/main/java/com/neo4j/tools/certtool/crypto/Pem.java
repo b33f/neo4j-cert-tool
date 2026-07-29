@@ -5,9 +5,10 @@ import java.util.Base64;
 /**
  * RFC 7468 textual encoding of DER structures.
  *
- * <p>JDK 25 ships {@code PEMEncoder}/{@code PEMDecoder} (JEP 470), but only as a preview API,
- * which would force {@code --enable-preview} on every user at both compile and run time. PEM is a
- * base64 body between two label lines, so it is written directly here instead.
+ * <p>{@code PEMEncoder}/{@code PEMDecoder} (JEP 470) would be the obvious choice, but they do not
+ * exist before JDK 25 and are only a preview API there — using them would both raise this tool's
+ * baseline above JDK 21 and force {@code --enable-preview} on every user at compile and run time.
+ * PEM is a base64 body between two label lines, so it is written directly here instead.
  */
 public final class Pem {
 

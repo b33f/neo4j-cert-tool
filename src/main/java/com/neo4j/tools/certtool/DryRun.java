@@ -89,8 +89,7 @@ public final class DryRun {
         }
 
         if (options.passwordMode() == PasswordProvider.Mode.PROMPT) {
-            var console = System.console();
-            if (console == null || !console.isTerminal()) {
+            if (!PasswordProvider.terminalAvailable()) {
                 blockers.add(new Blocker(
                         "passwords would be prompted for, but there is no terminal to prompt on",
                         "use --generate-password or --password-file when running unattended"));

@@ -124,18 +124,236 @@ public final class Extensions {
     /**
      * Returns the address if {@code name} is an IP literal, otherwise null.
      *
-     * <p>{@link InetAddress#ofLiteral} (added in JDK 22) parses literals only and never performs
-     * name resolution, so classifying a name cannot trigger a DNS lookup.
+     * <p>Parsed here rather than through the JDK. {@code InetAddress.ofLiteral} would be the
+     * obvious choice but only exists from JDK 22, and this tool supports 21. The alternative,
+     * {@link InetAddress#getByName}, is not usable for classification: given a hostname it performs
+     * a DNS lookup, so a name that failed to parse as an address would silently become a network
+     * request — and a resolvable hostname would be encoded as an {@code iPAddress} entry, which no
+     * peer would match. Nothing below resolves anything; a string either parses as a literal or it
+     * does not.
+     *
+     * <p>{@link InetAddress#getByAddress(byte[])} builds the result from raw bytes and never
+     * resolves either.
      */
     public static InetAddress asIpLiteral(String name) {
-        try {
-            return InetAddress.ofLiteral(name);
-        } catch (IllegalArgumentException notALiteral) {
+        byte[] address = parseIpLiteral(name);
+        if (address == null) {
             return null;
+        }
+        try {
+            return InetAddress.getByAddress(address);
+        } catch (java.net.UnknownHostException impossible) {
+            // Only thrown for an address of illegal length, and the parser returns 4 or 16 bytes.
+            throw new IllegalStateException("Unexpected address length for " + name, impossible);
         }
     }
 
+    /**
+     * Parses an IPv4 or IPv6 literal to its raw bytes, or returns null if it is not one.
+     *
+     * <p>Deliberately stricter than {@code InetAddress.ofLiteral}, which accepts several ambiguous
+     * forms that have no place in a certificate:
+     *
+     * <ul>
+     *   <li>{@code 1.2.3} — the legacy three-part form, which the JDK reads as {@code 1.2.0.3}.
+     *       Almost always a typo, and inventing an octet from one would be worse than refusing.
+     *   <li>{@code 01.2.3.4} — leading zeros. The JDK reads them as decimal, but other stacks read
+     *       a leading zero as octal, so {@code 010.1.1.1} can mean two different addresses. An
+     *       address that means different things to different readers is not safe to certify.
+     *   <li>{@code fe80::1%en0} — a zone identifier. There is no way to encode one in a certificate,
+     *       and quietly dropping it would certify an address the caller did not ask for.
+     * </ul>
+     *
+     * <p>Anything rejected here is then validated as a DNS name, so it fails with a message rather
+     * than being silently reinterpreted.
+     */
+    static byte[] parseIpLiteral(String name) {
+        if (name == null || name.isEmpty()) {
+            return null;
+        }
+        if (name.indexOf(':') < 0) {
+            return parseIpv4(name);
+        }
+        byte[] address = parseIpv6(name);
+        return address == null ? null : unwrapIpv4Mapped(address);
+    }
+
+    /**
+     * Collapses an IPv4-mapped address ({@code ::ffff:10.0.0.11}) to its four IPv4 octets.
+     *
+     * <p>RFC 5280 sizes an {@code iPAddress} entry by family, and a peer connecting over IPv4
+     * compares a four-octet address. Leaving the 16-octet form in the certificate would produce an
+     * entry that never matches. This is also what {@code InetAddress.ofLiteral} does.
+     */
+    private static byte[] unwrapIpv4Mapped(byte[] address) {
+        for (int i = 0; i < 10; i++) {
+            if (address[i] != 0) {
+                return address;
+            }
+        }
+        if ((address[10] & 0xFF) != 0xFF || (address[11] & 0xFF) != 0xFF) {
+            return address;
+        }
+        return java.util.Arrays.copyOfRange(address, 12, 16);
+    }
+
+    /** Strict dotted-quad: exactly four decimal octets, no leading zeros, each 0-255. */
+    private static byte[] parseIpv4(String text) {
+        byte[] address = new byte[4];
+        int octet = 0;
+        int start = 0;
+        while (octet < 4) {
+            int dot = text.indexOf('.', start);
+            int end = dot < 0 ? text.length() : dot;
+            int value = parseOctet(text, start, end);
+            if (value < 0) {
+                return null;
+            }
+            address[octet++] = (byte) value;
+            if (dot < 0) {
+                // Ran out of text: only valid if that was the fourth octet.
+                return octet == 4 ? address : null;
+            }
+            start = dot + 1;
+        }
+        // More text after four octets, such as "1.2.3.4.5".
+        return null;
+    }
+
+    private static int parseOctet(String text, int from, int to) {
+        int length = to - from;
+        if (length < 1 || length > 3) {
+            return -1;
+        }
+        // A leading zero would be ambiguous — some parsers read it as octal — so reject it.
+        if (length > 1 && text.charAt(from) == '0') {
+            return -1;
+        }
+        int value = 0;
+        for (int i = from; i < to; i++) {
+            int digit = text.charAt(i) - '0';
+            if (digit < 0 || digit > 9) {
+                return -1;
+            }
+            value = value * 10 + digit;
+        }
+        return value <= 255 ? value : -1;
+    }
+
+    /**
+     * IPv6 as RFC 4291 defines it: eight 16-bit groups, optionally with one {@code ::} standing for
+     * one or more all-zero groups, and optionally ending in a dotted-quad.
+     *
+     * <p>A zone identifier ({@code fe80::1%en0}) is rejected: there is no way to represent one in a
+     * certificate, so treating it as an address would be misleading.
+     */
+    private static byte[] parseIpv6(String text) {
+        if (text.indexOf('%') >= 0) {
+            return null;
+        }
+        int compression = text.indexOf("::");
+        if (compression >= 0 && text.indexOf("::", compression + 1) >= 0) {
+            return null; // "::" may appear at most once
+        }
+
+        byte[] address = new byte[16];
+        if (compression < 0) {
+            return readGroups(text, address, 0, 16, true) == 16 ? address : null;
+        }
+
+        String head = text.substring(0, compression);
+        String tail = text.substring(compression + 2);
+
+        int headLength = 0;
+        if (!head.isEmpty()) {
+            // A dotted-quad before the "::" is invalid: it may only occupy the last 32 bits.
+            headLength = readGroups(head, address, 0, 16, false);
+            if (headLength < 0) {
+                return null;
+            }
+        }
+        if (tail.isEmpty()) {
+            // Trailing "::" — the remaining groups are zero, which the array already is.
+            return headLength < 16 ? address : null;
+        }
+
+        byte[] trailing = new byte[16];
+        int tailLength = readGroups(tail, trailing, 0, 16 - headLength, true);
+        if (tailLength < 0) {
+            return null;
+        }
+        // "::" has to stand for at least one zero group, so the two halves cannot fill the address.
+        if (headLength + tailLength >= 16) {
+            return null;
+        }
+        System.arraycopy(trailing, 0, address, 16 - tailLength, tailLength);
+        return address;
+    }
+
+    /**
+     * Reads colon-separated groups into {@code out}, returning the number of bytes written, or -1 if
+     * the text is not a valid group sequence. A dotted-quad is accepted only as the final group.
+     */
+    private static int readGroups(
+            String text, byte[] out, int offset, int limit, boolean allowEmbeddedIpv4) {
+        int written = 0;
+        int start = 0;
+        while (true) {
+            int colon = text.indexOf(':', start);
+            int end = colon < 0 ? text.length() : colon;
+            if (end == start) {
+                return -1; // an empty group, from a stray or doubled colon
+            }
+            if (colon < 0 && text.indexOf('.', start) >= 0) {
+                if (!allowEmbeddedIpv4) {
+                    return -1;
+                }
+                // A trailing dotted-quad supplies the last two groups.
+                byte[] embedded = parseIpv4(text.substring(start));
+                if (embedded == null || written + 4 > limit) {
+                    return -1;
+                }
+                System.arraycopy(embedded, 0, out, offset + written, 4);
+                return written + 4;
+            }
+            int group = parseHexGroup(text, start, end);
+            if (group < 0 || written + 2 > limit) {
+                return -1;
+            }
+            out[offset + written] = (byte) (group >>> 8);
+            out[offset + written + 1] = (byte) group;
+            written += 2;
+            if (colon < 0) {
+                return written;
+            }
+            start = colon + 1;
+        }
+    }
+
+    /** One to four hexadecimal digits, as a 16-bit value. */
+    private static int parseHexGroup(String text, int from, int to) {
+        if (to - from < 1 || to - from > 4) {
+            return -1;
+        }
+        int value = 0;
+        for (int i = from; i < to; i++) {
+            int digit = Character.digit(text.charAt(i), 16);
+            if (digit < 0) {
+                return -1;
+            }
+            value = (value << 4) | digit;
+        }
+        return value;
+    }
+
     private static void requireValidDnsName(String name) {
+        if (name.indexOf(':') >= 0) {
+            // A colon can only have been an attempt at an IPv6 address, so say that rather than
+            // complaining that it is a bad hostname.
+            throw new IllegalArgumentException(
+                    "Not a valid IPv6 address: '" + name + "'. Note that a zone identifier such as "
+                            + "'%eth0' cannot be represented in a certificate.");
+        }
         if (name.isEmpty() || name.length() > 253) {
             throw new IllegalArgumentException("Not a usable DNS name: '" + name + "'");
         }

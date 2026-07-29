@@ -31,17 +31,17 @@ if [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/java" ]; then
 elif command -v java >/dev/null 2>&1; then
     java_command=java
 else
-    echo "No Java runtime found. Install JDK 25 or later, or set JAVA_HOME." >&2
+    echo "No Java runtime found. Install JDK 21 or later, or set JAVA_HOME." >&2
     exit 1
 fi
 
-# The tool is compiled for release 25. Checking here turns an UnsupportedClassVersionError,
+# The tool is compiled for release 21. Checking here turns an UnsupportedClassVersionError,
 # which says nothing about what to do next, into a message that does.
 version=$("$java_command" -XshowSettings:properties -version 2>&1 \
     | sed -n 's/^ *java\.specification\.version *= *\([0-9][0-9]*\).*/\1/p' \
     | head -1)
-if [ -n "$version" ] && [ "$version" -lt 25 ]; then
-    echo "neo4j-cert-tool needs JDK 25 or later, but $java_command is Java $version." >&2
+if [ -n "$version" ] && [ "$version" -lt 21 ]; then
+    echo "neo4j-cert-tool needs JDK 21 or later, but $java_command is Java $version." >&2
     echo "Set JAVA_HOME to a newer JDK, or install one." >&2
     exit 1
 fi

@@ -266,8 +266,37 @@ public final class PasswordProvider implements AutoCloseable {
         }
     }
 
+    /**
+     * Whether a terminal is attached that can be prompted on.
+     *
+     * <p>The check differs by JDK version. Up to 21, {@link System#console()} returns null unless
+     * the streams are attached to a terminal, so a non-null console is the answer. From 22 it
+     * returns a {@code Console} even when streams are redirected, and {@code Console.isTerminal()}
+     * is what distinguishes the two — but that method does not exist in 21, so it cannot be called
+     * directly by code that compiles against 21.
+     *
+     * <p>Hence the reflective call: it is a public method on a public JDK class, and the fallback is
+     * exactly right for the versions that lack it. The alternative would be dropping the check,
+     * which on 22+ would turn a clear "no terminal available" message into a confusing failure part
+     * way through a run.
+     */
+    static boolean terminalAvailable() {
+        Console console = System.console();
+        if (console == null) {
+            return false;
+        }
+        try {
+            return (Boolean) Console.class.getMethod("isTerminal").invoke(console);
+        } catch (NoSuchMethodException before22) {
+            return true;
+        } catch (ReflectiveOperationException | ClassCastException unexpected) {
+            // Better to attempt the prompt than to refuse to run over a failed introspection.
+            return true;
+        }
+    }
+
     private char[] prompt(String subject) {
-        if (console == null || !console.isTerminal()) {
+        if (!terminalAvailable()) {
             throw new IllegalStateException(
                     """
                     No terminal is available to prompt for a password.
