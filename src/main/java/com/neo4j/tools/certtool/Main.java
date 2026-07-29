@@ -6,6 +6,7 @@ import com.neo4j.tools.certtool.crypto.DistinguishedName;
 import com.neo4j.tools.certtool.crypto.PemFiles;
 import com.neo4j.tools.certtool.model.TrustMode;
 import com.neo4j.tools.certtool.output.BundleWriter;
+import com.neo4j.tools.certtool.output.FilePermissions;
 import com.neo4j.tools.certtool.output.Layout;
 import com.neo4j.tools.certtool.output.Reporter;
 import com.neo4j.tools.certtool.verify.BundleVerifier;
@@ -106,7 +107,13 @@ public final class Main {
                         .reduce((a, b) -> a + ", " + b)
                         .orElse("none"));
         reporter.info("  leaf validity  %d days", options.validityDays());
+        reporter.info("  passwords      %s", describePasswordSource(options));
         reporter.blankLine();
+
+        if (options.dryRun()) {
+            // Returns before any password is asked for and before anything is created.
+            return report(new DryRun(options).plan(), options);
+        }
 
         try (PasswordProvider passwords = createPasswordProvider(options, random)) {
             Optional<Authority> existingCa = loadExistingAuthority(options, passwords, random);
@@ -142,6 +149,88 @@ public final class Main {
             reportNextSteps(options, result, reporter);
         }
         return EXIT_OK;
+    }
+
+    /** Prints the plan a dry run produced and returns the exit code for it. */
+    private int report(DryRun.Plan plan, Options options) {
+        out.println("DRY RUN — nothing will be written.");
+        out.println();
+        out.printf("Would create %d files and %d directories.%n", plan.files(), plan.directories());
+
+        // Grouped under each destination with relative paths: absolute paths repeated on every
+        // line would be unreadable and would wreck the column alignment.
+        List<Path> roots = new java.util.ArrayList<>();
+        roots.add(options.outputDirectory());
+        if (options.installNode().isPresent()) {
+            options.neo4jHome().ifPresent(roots::add);
+        }
+        // Longest first, so an entry is attributed to the most specific destination containing it.
+        List<Path> bySpecificity = roots.stream()
+                .sorted(java.util.Comparator.comparingInt(
+                        (Path path) -> path.toString().length()).reversed())
+                .toList();
+
+        for (Path root : roots) {
+            out.println();
+            out.println("Under " + root + ":");
+            for (DryRun.PlannedEntry entry : plan.entries()) {
+                boolean belongsHere = bySpecificity.stream()
+                        .filter(entry.path()::startsWith)
+                        .findFirst()
+                        .filter(root::equals)
+                        .isPresent();
+                if (!belongsHere) {
+                    continue;
+                }
+                String relative = root.relativize(entry.path()).toString();
+                String name = (relative.isEmpty() ? "." : relative) + (entry.directory() ? "/" : "");
+                out.printf(
+                        "  %-46s %-17s%s%n",
+                        name,
+                        FilePermissions.describe(entry.permissions()),
+                        entry.note() == null ? "" : "  " + entry.note());
+            }
+        }
+
+        if (options.trustMode().usesCa() && options.existingCaCertificate().isEmpty()) {
+            out.println();
+            out.println("Would generate a new certificate authority. Keep it off the cluster machines.");
+        }
+        out.println();
+        out.printf(
+                "Would generate %d key pair(s): %d node(s) x %d scope(s)%s.%n",
+                options.nodes().size() * options.scopes().size()
+                        + (options.trustMode().usesCa() && options.existingCaCertificate().isEmpty()
+                                ? options.trustMode() == com.neo4j.tools.certtool.model.TrustMode.INTERMEDIATE ? 2 : 1
+                                : 0),
+                options.nodes().size(),
+                options.scopes().size(),
+                options.trustMode().usesCa() && options.existingCaCertificate().isEmpty()
+                        ? ", plus the CA" : "");
+
+        if (plan.wouldSucceed()) {
+            out.println();
+            out.println("No problems found. Re-run without --dry-run to proceed.");
+            return EXIT_OK;
+        }
+
+        err.println();
+        err.printf("%d problem(s) would stop this run:%n", plan.blockers().size());
+        for (DryRun.Blocker blocker : plan.blockers()) {
+            err.println("  " + blocker.description());
+            err.println("      " + blocker.remedy());
+        }
+        return EXIT_FAILURE;
+    }
+
+    private static String describePasswordSource(Options options) {
+        return switch (options.passwordMode()) {
+            case PROMPT -> options.sharedPassword()
+                    ? "prompt once, shared by every key"
+                    : "prompt, one per node";
+            case GENERATE -> "generated, one per node";
+            case FILE -> "read from " + options.passwordFile().orElseThrow();
+        };
     }
 
     private PasswordProvider createPasswordProvider(Options options, SecureRandom random)

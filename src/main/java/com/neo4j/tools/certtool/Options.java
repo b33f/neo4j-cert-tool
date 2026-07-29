@@ -32,6 +32,7 @@ import java.util.Set;
  * @param existingCaKey the matching CA private key
  * @param caPasswordFile password file for an existing CA key
  * @param owner {@code user[:group]} to give the generated files, when running as root
+ * @param dryRun report what would be done and write nothing
  * @param force overwrite non-empty output directories
  * @param quiet suppress the informational summary
  */
@@ -55,6 +56,7 @@ public record Options(
         Optional<Path> existingCaKey,
         Optional<Path> caPasswordFile,
         Optional<String> owner,
+        boolean dryRun,
         boolean force,
         boolean quiet) {
 
@@ -130,6 +132,7 @@ public record Options(
                 Optional.empty(),
                 Optional.empty(),
                 Optional.empty(),
+                false,
                 false,
                 false);
     }

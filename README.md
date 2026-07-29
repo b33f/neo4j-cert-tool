@@ -184,6 +184,69 @@ certificates, real organisational naming, and only the two client-facing scopes:
   --generate-password --out ./certs
 ```
 
+### Checking before you commit to it
+
+Any invocation can be prefixed with `--dry-run` to see what it would do without doing any of it. This
+is worth doing before a run that writes into a live installation, or whenever you are unsure whether
+something is already in the way:
+
+```bash
+./scripts/neo4j-cert-tool --dry-run \
+  --node core1:core1.example.com,10.0.0.11 \
+  --node core2:core2.example.com,10.0.0.12 \
+  --scopes bolt,cluster --out ./certs --generate-password
+```
+
+```
+DRY RUN — nothing will be written.
+
+Would create 17 files and 18 directories.
+
+Under ./certs:
+  ./                                             rwx------ (0700)   holds every node's private key
+  ca/                                            rwx------ (0700)
+  ca/ca.crt                                      rw-r--r-- (0644)   root CA certificate
+  ca/ca.key                                      r-------- (0400)   root CA private key, encrypted
+  ca/README.txt                                  r-------- (0400)
+  core1/                                         rwx------ (0700)
+  core1/certificates/                            rwxr-xr-x (0755)
+  core1/certificates/bolt/                       rwxr-xr-x (0755)   Bolt driver connections (neo4j:// and bolt+s://)
+  core1/certificates/bolt/private.key            r-------- (0400)   encrypted private key
+  core1/certificates/bolt/public.crt             rw-r--r-- (0644)
+  core1/certificates/bolt/trusted/               rwxr-xr-x (0755)
+  core1/certificates/bolt/trusted/root-ca.crt    rw-r--r-- (0644)
+  core1/certificates/bolt/revoked/               rwxr-xr-x (0755)   empty, for CRLs
+  ...
+
+Would generate 5 key pair(s): 2 node(s) x 2 scope(s), plus the CA.
+
+No problems found. Re-run without --dry-run to proceed.
+```
+
+It also reports what *would stop* the run, rather than letting you find out half way through — a
+non-empty output directory, an existing policy directory at an `--install` target, an unreadable or
+malformed password file, or a missing `--ca-cert`/`--ca-key`. Every problem is listed at once, each
+with its remedy:
+
+```
+1 problem(s) would stop this run:
+  the output directory ./certs is not empty
+      move it aside, choose another path with --out, or pass --force to overwrite
+```
+
+It exits `0` when the run would proceed and `1` when it would be blocked, so it can gate a
+deployment script:
+
+```bash
+./scripts/neo4j-cert-tool --dry-run --config cluster.properties || exit 1
+./scripts/neo4j-cert-tool --config cluster.properties
+```
+
+No keys are generated and no password is prompted for, so a dry run is immediate and safe to run
+against anything.
+
+### Confirming the result
+
 Check what you actually got, rather than trusting the flags:
 
 ```bash

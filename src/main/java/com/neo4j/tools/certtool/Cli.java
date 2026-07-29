@@ -34,7 +34,8 @@ public final class Cli {
 
     /** Options that take no value. */
     private static final Set<String> FLAGS = Set.of(
-            "install", "generate-password", "shared-password", "force", "quiet", "help", "version");
+            "install", "generate-password", "shared-password", "dry-run", "force", "quiet", "help",
+            "version");
 
     private Cli() {}
 
@@ -115,6 +116,7 @@ public final class Cli {
                 }
             }
             case "shared-password" -> draft.sharedPassword = value;
+            case "dry-run" -> draft.dryRun = value;
             case "force" -> draft.force = value;
             case "quiet" -> draft.quiet = value;
             case "help" -> draft.command = Options.Command.HELP;
@@ -300,6 +302,7 @@ public final class Cli {
         Path passwordFile;
         boolean sharedPassword;
         int pbkdf2Iterations = com.neo4j.tools.certtool.crypto.Pkcs8.DEFAULT_ITERATIONS;
+        boolean dryRun;
         boolean force;
         boolean quiet;
 
@@ -334,6 +337,7 @@ public final class Cli {
                     Optional.ofNullable(existingCaKey),
                     Optional.ofNullable(caPasswordFile),
                     Optional.ofNullable(owner),
+                    dryRun,
                     force,
                     quiet);
         }

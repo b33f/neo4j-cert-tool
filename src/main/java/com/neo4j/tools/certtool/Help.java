@@ -130,6 +130,14 @@ public final class Help {
               --owner <user>[:<group>]    Give the generated files this owner, for example
                                           neo4j:neo4j. Needs root, and a POSIX file system.
                                           Without it the tool prints the chown command to run.
+              --dry-run                   Report what would be created — every path, with the
+                                          permissions it would be given — and write nothing. Also
+                                          reports anything that would stop the run, such as a
+                                          non-empty output directory, a live policy directory at the
+                                          install target, or an unreadable password file or CA.
+                                          Exits 0 if the run would proceed and 1 if it would be
+                                          blocked, so it can gate a script. No keys are generated
+                                          and no password is asked for.
               --force                     Overwrite existing files.
               --quiet                     Print only warnings and errors.
 
