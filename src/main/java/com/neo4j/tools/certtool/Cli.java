@@ -27,6 +27,8 @@ public final class Cli {
 
     /** Thrown for anything the user can fix by changing their arguments. */
     public static final class UsageException extends Exception {
+        private static final long serialVersionUID = 1L;
+
         public UsageException(String message) {
             super(message);
         }

@@ -77,10 +77,10 @@ public final class DryRun {
                         "check the path, or use --generate-password"));
             } else {
                 // Parsing it now turns a malformed file into a dry-run finding rather than a
-                // failure part-way through a real run. Reading is side-effect free.
-                try (PasswordProvider ignored =
-                        PasswordProvider.fromFile(file, new java.security.SecureRandom())) {
-                    // Closing zeroes whatever was read; nothing else to do with it here.
+                // failure part-way through a real run. Reading is side-effect free, and closing
+                // immediately zeroes the passwords it read, which are not needed here.
+                try {
+                    PasswordProvider.fromFile(file, new java.security.SecureRandom()).close();
                 } catch (IOException e) {
                     blockers.add(new Blocker("the password file " + file + " is not usable: "
                             + e.getMessage(), "correct the file's format"));

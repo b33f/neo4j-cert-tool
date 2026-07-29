@@ -305,7 +305,9 @@ class DryRunTest {
 
         assertEquals(Main.EXIT_OK, run.exitCode(), run.all());
         assertFalse(run.stdout().contains("Would generate a new certificate authority"), run.stdout());
-        assertFalse(run.stdout().contains("ca/ca.key"), "no CA directory should be planned: " + run.stdout());
+        assertFalse(
+                withForwardSlashes(run.stdout()).contains("ca/ca.key"),
+                "no CA directory should be planned: " + run.stdout());
     }
 
     @Test
@@ -313,9 +315,22 @@ class DryRunTest {
     void respectsScopeSelection(@TempDir Path work) throws Exception {
         Run run = invoke(arguments(work, "--dry-run", "--scopes", "bolt,https").toArray(String[]::new));
 
-        assertTrue(run.stdout().contains("certificates/bolt"), run.stdout());
-        assertTrue(run.stdout().contains("certificates/https"), run.stdout());
-        assertFalse(run.stdout().contains("certificates/cluster"), run.stdout());
-        assertFalse(run.stdout().contains("certificates/backup"), run.stdout());
+        String plan = withForwardSlashes(run.stdout());
+        assertTrue(plan.contains("certificates/bolt"), run.stdout());
+        assertTrue(plan.contains("certificates/https"), run.stdout());
+        assertFalse(plan.contains("certificates/cluster"), run.stdout());
+        assertFalse(plan.contains("certificates/backup"), run.stdout());
+    }
+
+    /**
+     * Normalises path separators so a path assertion means the same thing on every platform.
+     *
+     * <p>The plan prints paths with the platform's own separator, which is what a user should see —
+     * {@code core1\certificates\bolt} on Windows. Comparing against a hard-coded {@code /} made this
+     * suite pass on POSIX and fail on Windows, and quietly turned the negative assertions here into
+     * vacuous ones there.
+     */
+    private static String withForwardSlashes(String text) {
+        return text.replace('\\', '/');
     }
 }
