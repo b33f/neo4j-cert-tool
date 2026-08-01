@@ -89,6 +89,42 @@ public final class Help {
               --intermediate-common-name <name>
                                           Intermediate CA subject CN.
 
+            LIMITING WHAT THE CA CAN ISSUE FOR
+              A generated CA is name constrained by default (RFC 5280 nameConstraints,
+              marked critical). Without that, anyone holding the CA key could issue a
+              certificate for any name at all — google.com included — and every machine
+              trusting the CA would believe it. That matters most if you add the CA to an
+              operating system trust store.
+
+              The limits are derived from the names you give, widened just enough that the
+              CA stays useful:
+
+                DNS   constrained to the parent domain, so a CA made for
+                      core1.example.com can later issue core9.example.com but never
+                      google.com. A two-label name such as example.com is kept whole,
+                      since permitting 'com' would be no constraint at all.
+                IP    constrained to the private or loopback range the address is in, so
+                      another node on the same network can be added. A routable address is
+                      constrained to itself. If no node uses an address at all, every
+                      address is excluded.
+
+              The tool refuses to issue for a node outside an existing CA's limits, rather
+              than producing certificates that every peer would reject.
+
+              Note where this is and is not enforced. OpenSSL, browsers and the operating
+              system trust stores enforce name constraints on a root. The JDK does not:
+              path validation begins below the trust anchor, so a root's own constraints
+              are skipped. Use --mode intermediate if you need the JDK, and so Neo4j
+              itself, to enforce them — an intermediate sits inside the path, where its
+              constraints are always processed.
+
+              --permit-dns <suffix>       Also permit this DNS subtree. Repeatable.
+              --permit-ip <cidr>          Also permit this address range, for example
+                                          10.0.0.0/8. Repeatable.
+              --no-name-constraints       Do not constrain the CA at all. Only sensible if
+                                          something in your environment mishandles the
+                                          extension.
+
             REUSING AN EXISTING CA
               --ca-cert <file>            Issue from an existing CA certificate instead of
               --ca-key <file>             creating a new one. Use these when adding a node to

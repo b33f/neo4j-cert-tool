@@ -381,6 +381,94 @@ public final class Extensions {
         }
     }
 
+    /**
+     * {@code nameConstraints}, limiting what the CA below it may issue for.
+     *
+     * <pre>
+     * NameConstraints ::= SEQUENCE {
+     *      permittedSubtrees [0] GeneralSubtrees OPTIONAL,
+     *      excludedSubtrees  [1] GeneralSubtrees OPTIONAL }
+     * GeneralSubtrees ::= SEQUENCE SIZE (1..MAX) OF GeneralSubtree
+     * GeneralSubtree  ::= SEQUENCE { base GeneralName, minimum [0] DEFAULT 0, maximum [1] OPTIONAL }
+     * </pre>
+     *
+     * <p>RFC 5280 requires {@code minimum} to be zero and {@code maximum} to be absent, so each
+     * subtree is just its base name. An {@code iPAddress} base here is the address <em>followed by
+     * its mask</em>, unlike a subjectAltName entry which carries the address alone.
+     *
+     * <p>Marked critical, as RFC 5280 requires: a validator that cannot enforce the constraint must
+     * refuse the certificate rather than ignore the limit.
+     *
+     * @param permittedDns DNS subtrees the CA may issue within
+     * @param permittedIpRanges address ranges the CA may issue within, already address-plus-mask
+     * @param excludedIpRanges address ranges the CA may never issue within
+     */
+    public static Extension nameConstraints(
+            List<String> permittedDns,
+            List<byte[]> permittedIpRanges,
+            List<byte[]> excludedIpRanges) {
+        List<byte[]> permitted = new ArrayList<>();
+        for (String suffix : permittedDns) {
+            permitted.add(Der.sequence(Der.contextPrimitive(2, suffix.getBytes(StandardCharsets.US_ASCII))));
+        }
+        for (byte[] range : permittedIpRanges) {
+            permitted.add(Der.sequence(Der.contextPrimitive(7, range)));
+        }
+        List<byte[]> excluded = new ArrayList<>();
+        for (byte[] range : excludedIpRanges) {
+            excluded.add(Der.sequence(Der.contextPrimitive(7, range)));
+        }
+        if (permitted.isEmpty() && excluded.isEmpty()) {
+            throw new IllegalArgumentException("A nameConstraints extension needs at least one subtree");
+        }
+
+        List<byte[]> parts = new ArrayList<>();
+        if (!permitted.isEmpty()) {
+            parts.add(Der.explicit(0, permitted.toArray(byte[][]::new)));
+        }
+        if (!excluded.isEmpty()) {
+            parts.add(Der.explicit(1, excluded.toArray(byte[][]::new)));
+        }
+        return new Extension(
+                Oids.NAME_CONSTRAINTS, true, Der.sequence(parts.toArray(byte[][]::new)));
+    }
+
+    /**
+     * Reads the permitted DNS subtrees out of an encoded {@code nameConstraints} extension, so the
+     * tool can tell whether a node it is about to issue for is inside an existing CA's limits.
+     *
+     * @param extensionValue the DER {@code NameConstraints}, unwrapped from its OCTET STRING
+     */
+    public static List<String> permittedDnsSubtrees(byte[] extensionValue) {
+        List<String> subtrees = new ArrayList<>();
+        forEachPermittedSubtree(extensionValue, 2, bytes ->
+                subtrees.add(new String(bytes, StandardCharsets.US_ASCII)));
+        return subtrees;
+    }
+
+    /** Reads the permitted {@code iPAddress} subtrees, each still address-plus-mask. */
+    public static List<byte[]> permittedIpSubtrees(byte[] extensionValue) {
+        List<byte[]> subtrees = new ArrayList<>();
+        forEachPermittedSubtree(extensionValue, 7, subtrees::add);
+        return subtrees;
+    }
+
+    private static void forEachPermittedSubtree(
+            byte[] extensionValue, int generalNameTag, java.util.function.Consumer<byte[]> sink) {
+        Der.Reader constraints = new Der.Reader(extensionValue).readConstructed(Der.TAG_SEQUENCE);
+        if (!constraints.hasNext() || constraints.peekTag() != (0xA0)) {
+            return; // no permittedSubtrees, so nothing is restricted by inclusion
+        }
+        Der.Reader permitted = constraints.readConstructed(0xA0);
+        while (permitted.hasNext()) {
+            Der.Reader subtree = permitted.readConstructed(Der.TAG_SEQUENCE);
+            int tag = subtree.peekTag();
+            if (tag == (0x80 | generalNameTag)) {
+                sink.accept(subtree.readPrimitive(tag));
+            }
+        }
+    }
+
     /** {@code subjectKeyIdentifier} derived from the public key. */
     public static Extension subjectKeyIdentifier(PublicKey publicKey) {
         return new Extension(

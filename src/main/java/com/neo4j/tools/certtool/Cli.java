@@ -36,8 +36,8 @@ public final class Cli {
 
     /** Options that take no value. */
     private static final Set<String> FLAGS = Set.of(
-            "install", "generate-password", "shared-password", "dry-run", "force", "quiet", "help",
-            "version");
+            "install", "generate-password", "shared-password", "dry-run", "no-name-constraints",
+            "force", "quiet", "help", "version");
 
     private Cli() {}
 
@@ -119,6 +119,7 @@ public final class Cli {
             }
             case "shared-password" -> draft.sharedPassword = value;
             case "dry-run" -> draft.dryRun = value;
+            case "no-name-constraints" -> draft.nameConstraints = !value;
             case "force" -> draft.force = value;
             case "quiet" -> draft.quiet = value;
             case "help" -> draft.command = Options.Command.HELP;
@@ -143,6 +144,12 @@ public final class Cli {
                 }
                 case "neo4j-home" -> draft.neo4jHome = Path.of(value);
                 case "owner" -> draft.owner = value;
+                case "permit-dns" -> draft.permitDns.add(value.trim());
+                case "permit-ip" -> {
+                    // Parsed now so a malformed range is a usage error, not a mid-run failure.
+                    com.neo4j.tools.certtool.model.NameConstraints.Cidr.parse(value.trim());
+                    draft.permitIp.add(value.trim());
+                }
                 case "organisation", "organization" -> draft.organisation = value;
                 case "organisational-unit", "organizational-unit" -> draft.organisationalUnit = value;
                 case "country" -> {
@@ -304,6 +311,9 @@ public final class Cli {
         Path passwordFile;
         boolean sharedPassword;
         int pbkdf2Iterations = com.neo4j.tools.certtool.crypto.Pkcs8.DEFAULT_ITERATIONS;
+        boolean nameConstraints = true;
+        final List<String> permitDns = new ArrayList<>();
+        final List<String> permitIp = new ArrayList<>();
         boolean dryRun;
         boolean force;
         boolean quiet;
@@ -338,6 +348,9 @@ public final class Cli {
                     Optional.ofNullable(existingCaCertificate),
                     Optional.ofNullable(existingCaKey),
                     Optional.ofNullable(caPasswordFile),
+                    nameConstraints,
+                    List.copyOf(permitDns),
+                    List.copyOf(permitIp),
                     Optional.ofNullable(owner),
                     dryRun,
                     force,

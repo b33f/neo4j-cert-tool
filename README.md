@@ -24,6 +24,41 @@ Example of creating certs for a three-node cluster with a local CA and generated
 > Provided without warranty, and not independently audited. For production, prefer certificates from
 > a real certificate authority — see [Security design, and its limits](#security-design-and-its-limits).
 
+## Contents
+
+- [Build](#build)
+- [Running it](#running-it)
+- [Quick start](#quick-start)
+- [Trust modes](#trust-modes)
+- [Changing the defaults](#changing-the-defaults)
+  - [Checking before you commit to it](#checking-before-you-commit-to-it)
+  - [Confirming the result](#confirming-the-result)
+- [Using a configuration file](#using-a-configuration-file)
+- [Limiting what the CA can issue for](#limiting-what-the-ca-can-issue-for)
+  - [Where the constraint is, and is not, enforced](#where-the-constraint-is-and-is-not-enforced)
+- [Trusting the CA on your machine](#trusting-the-ca-on-your-machine)
+- [What the certificates contain](#what-the-certificates-contain)
+- [Private key protection](#private-key-protection)
+- [File permissions](#file-permissions)
+- [Security design, and its limits](#security-design-and-its-limits)
+  - [What uses the JDK, and what does not](#what-uses-the-jdk-and-what-does-not)
+  - [Design decisions that matter](#design-decisions-that-matter)
+  - [What this tool does not do](#what-this-tool-does-not-do)
+- [Verifying](#verifying)
+- [Prerequisites](#prerequisites)
+  - [macOS](#macos)
+  - [Linux](#linux)
+  - [Windows](#windows)
+  - [Alternative: SDKMAN (macOS, Linux, WSL)](#alternative-sdkman-macos-linux-wsl)
+  - [Check the toolchain](#check-the-toolchain)
+- [Tests](#tests)
+- [Continuous integration and releases](#continuous-integration-and-releases)
+  - [Cutting a release](#cutting-a-release)
+  - [What a release contains](#what-a-release-contains)
+  - [Verifying a download](#verifying-a-download)
+- [Layout](#layout)
+- [Reference](#reference)
+
 ## Build
 
 ```bash
@@ -318,6 +353,139 @@ Node order in the file is preserved, so runs are reproducible. Commit the file n
 deployment configuration; regenerating a node months later then needs no reconstruction of which
 flags were used.
 
+## Limiting what the CA can issue for
+
+A certificate authority that can sign anything is a liability. Whoever holds the key can mint a
+certificate for **any** name — `google.com` included — and every machine trusting that CA will
+believe it. That risk becomes concrete the moment you
+[add the CA to an operating system trust store](#trusting-the-ca-on-your-machine).
+
+So a generated CA is **name constrained by default**: RFC 5280 `nameConstraints`, marked critical.
+The limits are derived from the names you give and widened just enough that the CA stays useful:
+
+| | Derived constraint | Effect |
+| --- | --- | --- |
+| DNS | the **parent domain** of each name | a CA made for `core1.example.com` can later issue `core9.example.com`, but never `google.com` |
+| IP | the **private or loopback range** the address sits in | another node on the same network can be added; a routable address is constrained to itself |
+| No addresses at all | every IP address is **excluded** | RFC 5280 only constrains name types that appear, so staying silent would leave the CA free to certify any address |
+
+A two-label name such as `example.com` is kept whole rather than reduced to `com`, since permitting a
+whole top-level domain would be no constraint at all.
+
+The tool tells you the limits when it creates the CA, repeats them in `ca/README.txt` beside the key,
+and shows them in a dry run:
+
+```
+  CA limits      DNS names at or below example.com
+                 IP addresses in 10.0.0.0/8
+```
+
+**Adding a node later.** The tool refuses to issue for a node outside an existing CA's limits, rather
+than producing certificates every peer would reject:
+
+```
+Error: This CA is name constrained and cannot issue for:
+  evil: google.com
+It may only issue for DNS names at or below: example.com, localhost
+```
+
+Widen the limits when creating the CA with `--permit-dns <suffix>` and `--permit-ip <cidr>`, both
+repeatable. `--no-name-constraints` switches the feature off entirely.
+
+### Where the constraint is, and is not, enforced
+
+This is worth understanding before relying on it, and it was measured rather than assumed:
+
+| Validator | CA is the trust anchor (`--mode ca`) | CA is inside the path (`--mode intermediate`) |
+| --- | --- | --- |
+| OpenSSL, browsers, OS trust stores | **enforced** — `permitted subtree violation` | **enforced** |
+| The JDK, and therefore Neo4j | **not enforced** | **enforced** — `name constraints check failed` |
+
+RFC 5280 path validation begins *below* the trust anchor, so a root's own extensions are not
+processed by every implementation. The JDK skips them; OpenSSL and the operating system trust stores
+do not. Passing the constraints to the JDK explicitly does not help either — `TrustAnchor` with name
+constraints is rejected outright with "name constraints in trust anchor not supported".
+
+What that means in practice:
+
+- **The protection is real where it matters most.** The serious risk is a stolen CA key being used to
+  impersonate a public site to a machine that trusts the CA — and that is exactly the OS trust store
+  and browser path, which does enforce.
+- **Inside the cluster, `--mode ca` does not enforce it.** A rogue certificate from that CA would
+  still be accepted by Neo4j. Use `--mode intermediate` if you want the constraint enforced there
+  too: an intermediate sits inside the path, where its constraints are always processed.
+
+The test suite pins both behaviours, including a test that fails if a future JDK starts enforcing
+anchor constraints — so this table cannot quietly go stale.
+
+## Trusting the CA on your machine
+
+Adding the CA to your operating system trust store makes browsers and other tools accept the
+certificates without warnings — useful for reaching Neo4j Browser over HTTPS during development.
+
+> **Understand what you are doing.** A trusted CA can vouch for any name it is permitted to issue,
+> for every application on the machine. Add only a CA you generated yourself, keep its private key
+> off that machine, and remove it when you are done. The name constraint above is what bounds the
+> damage if the key is ever stolen: OS trust stores enforce it, so a CA limited to `example.com`
+> cannot be used to impersonate your bank. Never add an unconstrained CA
+> (`--no-name-constraints`) to a trust store.
+
+Only the CA certificate is needed — `ca/ca.crt`. Never distribute `ca/ca.key`.
+
+**macOS.** Add to the system keychain and mark it trusted for TLS:
+
+```bash
+sudo security add-trusted-cert -d -r trustRoot \
+  -k /Library/Keychains/System.keychain ./certs/ca/ca.crt
+
+# to remove it again
+sudo security delete-certificate -c "Neo4j Cluster Root CA" /Library/Keychains/System.keychain
+```
+
+Use the certificate's common name in the removal command; it is whatever `--ca-common-name` was set
+to, and defaults to `Neo4j Cluster Root CA`.
+
+**Windows**, in an elevated PowerShell:
+
+```powershell
+Import-Certificate -FilePath .\certs\ca\ca.crt `
+  -CertStoreLocation Cert:\LocalMachine\Root
+
+# to remove it again, find it and delete by thumbprint
+Get-ChildItem Cert:\LocalMachine\Root | Where-Object Subject -Match 'Neo4j Cluster Root CA'
+Remove-Item Cert:\LocalMachine\Root\<thumbprint>
+```
+
+**Linux** varies by distribution. Debian and Ubuntu:
+
+```bash
+sudo cp ./certs/ca/ca.crt /usr/local/share/ca-certificates/neo4j-cluster-ca.crt
+sudo update-ca-certificates
+
+# to remove it again
+sudo rm /usr/local/share/ca-certificates/neo4j-cluster-ca.crt
+sudo update-ca-certificates --fresh
+```
+
+Fedora, RHEL and derivatives:
+
+```bash
+sudo cp ./certs/ca/ca.crt /etc/pki/ca-trust/source/anchors/neo4j-cluster-ca.crt
+sudo update-ca-trust extract
+
+# to remove it again
+sudo rm /etc/pki/ca-trust/source/anchors/neo4j-cluster-ca.crt
+sudo update-ca-trust extract
+```
+
+Firefox and Java keep their own trust stores and ignore the system one. Firefox: *Settings → Privacy
+& Security → Certificates → View Certificates → Authorities → Import*. For a JVM, either point it at
+a truststore containing the CA or import with `keytool -importcert -cacerts -alias neo4j-cluster-ca
+-file ca.crt`.
+
+None of this is needed for the cluster itself — Neo4j reads its trust anchors from each policy's
+`trusted/` directory, not from the operating system.
+
 ## What the certificates contain
 
 Matched to what Neo4j 2025.x requires:
@@ -522,11 +690,20 @@ during development, and repeating that after any change to the extension code is
 - **128-bit random serial numbers**, and SHA-256 or stronger signatures throughout. SHA-1 appears in
   exactly one place — deriving key identifiers, RFC 5280's naming function for chain building — where
   it is not relied on for collision resistance.
+- **The CA is name constrained**, so a stolen CA key cannot be used to impersonate arbitrary sites to
+  anyone trusting it. The limits are derived from the cluster's own names, marked critical as RFC
+  5280 requires, and the tool refuses to issue outside them. Enforcement is uneven and worth knowing
+  precisely: OS trust stores and OpenSSL enforce constraints on a root, the JDK does not — see
+  [Limiting what the CA can issue for](#limiting-what-the-ca-can-issue-for). This is the control that
+  makes [adding the CA to a trust store](#trusting-the-ca-on-your-machine) a bounded risk rather than
+  an unbounded one.
 
 ### What this tool does not do
 
 - **No revocation.** `revoked/` is created empty for you to place CRLs in; the tool neither issues
-  nor maintains one. Withdrawing a node's access means re-issuing and redistributing.
+  nor maintains one. Withdrawing a node's access means re-issuing and redistributing. This is why the
+  name constraint matters: with no way to revoke a compromised CA, bounding what it can issue for is
+  the only limit on the damage.
 - **No key backup, escrow or recovery.** Lose a generated password and that key is unrecoverable.
 - **No hardware protection.** The CA private key is a file guarded by a password. There is no
   PKCS#11 or HSM support, which is one of the clearest reasons to prefer a real CA.

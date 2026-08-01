@@ -108,6 +108,7 @@ public final class Main {
                         .orElse("none"));
         reporter.info("  leaf validity  %d days", options.validityDays());
         reporter.info("  passwords      %s", describePasswordSource(options));
+        describeNameConstraints(options, reporter);
         reporter.blankLine();
 
         if (options.dryRun()) {
@@ -195,6 +196,18 @@ public final class Main {
         if (options.trustMode().usesCa() && options.existingCaCertificate().isEmpty()) {
             out.println();
             out.println("Would generate a new certificate authority. Keep it off the cluster machines.");
+            var constraints = options.nameConstraints()
+                    ? com.neo4j.tools.certtool.model.NameConstraints.deriveFrom(
+                            options.nodes(), options.permitDns(), options.permitIp())
+                    : com.neo4j.tools.certtool.model.NameConstraints.none();
+            if (constraints.isEmpty()) {
+                out.println("  It would be UNCONSTRAINED: able to issue a certificate for any name,");
+                out.println("  including google.com. Drop --no-name-constraints to limit it.");
+            } else {
+                out.println("  It would be limited to issuing certificates for:");
+                constraints.describe().forEach(line -> out.println("    " + line));
+                out.println("  Nodes outside those limits could not be added to it later.");
+            }
         }
         out.println();
         out.printf(
@@ -221,6 +234,23 @@ public final class Main {
             err.println("      " + blocker.remedy());
         }
         return EXIT_FAILURE;
+    }
+
+    /** Reports what a newly created CA will and will not be allowed to issue for. */
+    private static void describeNameConstraints(Options options, Reporter reporter) {
+        if (!options.trustMode().usesCa() || options.existingCaCertificate().isPresent()) {
+            return;
+        }
+        if (!options.nameConstraints()) {
+            reporter.info("  CA limits      none — this CA could issue a certificate for any name");
+            return;
+        }
+        var constraints = com.neo4j.tools.certtool.model.NameConstraints.deriveFrom(
+                options.nodes(), options.permitDns(), options.permitIp());
+        List<String> lines = constraints.describe();
+        for (int i = 0; i < lines.size(); i++) {
+            reporter.info("  %-14s %s", i == 0 ? "CA limits" : "", lines.get(i));
+        }
     }
 
     private static String describePasswordSource(Options options) {

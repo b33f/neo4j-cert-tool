@@ -68,6 +68,12 @@ class DryRunTest {
                 inSection = line.equals("Under " + root + ":");
                 continue;
             }
+            if (inSection && line.isBlank()) {
+                // A blank line ends the listing. Without this, later indented prose — the CA's
+                // name constraints, for instance — would be read as though it were a planned path.
+                inSection = false;
+                continue;
+            }
             if (!inSection || !line.startsWith("  ")) {
                 continue;
             }

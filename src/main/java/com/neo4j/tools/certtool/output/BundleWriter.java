@@ -117,9 +117,19 @@ public final class BundleWriter {
 
         FilePermissions.write(
                 caDirectory.resolve(Layout.CA_README_FILE),
-                ConfSnippet.caReadme(),
+                ConfSnippet.caReadme(nameConstraintLines()),
                 FilePermissions.OWNER_READ_ONLY);
         applyOwnership(caDirectory);
+    }
+
+    /** The CA's limits, for the README written beside its key. */
+    private List<String> nameConstraintLines() {
+        if (!options.nameConstraints()) {
+            return List.of();
+        }
+        return com.neo4j.tools.certtool.model.NameConstraints.deriveFrom(
+                        options.nodes(), options.permitDns(), options.permitIp())
+                .describe();
     }
 
     // --- Node bundles ----------------------------------------------------------------------

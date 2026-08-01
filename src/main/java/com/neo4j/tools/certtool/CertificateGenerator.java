@@ -6,6 +6,7 @@ import com.neo4j.tools.certtool.crypto.Extensions.KeyUsage;
 import com.neo4j.tools.certtool.crypto.Oids;
 import com.neo4j.tools.certtool.crypto.SignatureAlgorithm;
 import com.neo4j.tools.certtool.crypto.X509Builder;
+import com.neo4j.tools.certtool.model.NameConstraints;
 import com.neo4j.tools.certtool.model.NodeSpec;
 import com.neo4j.tools.certtool.model.Scope;
 import com.neo4j.tools.certtool.model.TrustMode;
@@ -147,6 +148,7 @@ public final class CertificateGenerator {
                     "The certificate supplied with --ca-cert does not permit keyCertSign, "
                             + "so it cannot sign certificates");
         }
+        refuseNamesTheCaCannotIssueFor(certificate);
         if (twoTier && pathLength == 0) {
             throw new GeneralSecurityException(
                     """
@@ -157,6 +159,63 @@ public final class CertificateGenerator {
         }
         certificate.checkValidity(java.util.Date.from(now));
         return root;
+    }
+
+    /** The limits a newly created CA is bound to, empty when the feature is switched off. */
+    public NameConstraints nameConstraints() {
+        if (!options.nameConstraints()) {
+            return NameConstraints.none();
+        }
+        return NameConstraints.deriveFrom(options.nodes(), options.permitDns(), options.permitIp());
+    }
+
+    /**
+     * Refuses up front when a node's names fall outside an existing CA's name constraints.
+     *
+     * <p>Without this the run would succeed and the certificates would simply fail to validate on
+     * the cluster, which is a much harder failure to understand. The constraint is read from the
+     * CA certificate itself, so the answer reflects what that CA can actually issue.
+     */
+    private void refuseNamesTheCaCannotIssueFor(X509Certificate caCertificate)
+            throws GeneralSecurityException {
+        byte[] wrapped = caCertificate.getExtensionValue(Oids.NAME_CONSTRAINTS);
+        if (wrapped == null) {
+            return; // an unconstrained CA, so anything goes
+        }
+        List<String> permittedDns;
+        try {
+            // The extension value is a DER OCTET STRING wrapping the actual structure.
+            byte[] value = new com.neo4j.tools.certtool.crypto.Der.Reader(wrapped)
+                    .readPrimitive(com.neo4j.tools.certtool.crypto.Der.TAG_OCTET_STRING);
+            permittedDns = Extensions.permittedDnsSubtrees(value);
+        } catch (RuntimeException unreadable) {
+            return; // not a shape this tool wrote; leave validation to the peer
+        }
+        if (permittedDns.isEmpty()) {
+            return;
+        }
+
+        List<String> rejected = new ArrayList<>();
+        for (NodeSpec node : options.nodes()) {
+            for (String name : node.subjectAlternativeNames()) {
+                boolean isAddress = Extensions.asIpLiteral(name) != null;
+                if (!isAddress && permittedDns.stream().noneMatch(base -> NameConstraints.isUnder(name, base))) {
+                    rejected.add(node.name() + ": " + name);
+                }
+            }
+        }
+        if (!rejected.isEmpty()) {
+            throw new GeneralSecurityException(
+                    """
+                    This CA is name constrained and cannot issue for:
+                      %s
+                    It may only issue for DNS names at or below: %s
+
+                    Certificates for those names would be rejected by every peer that trusts this \
+                    CA, so they are not written. Use a CA whose constraints cover these names, or \
+                    create a new one without --ca-cert."""
+                            .formatted(String.join("\n  ", rejected), String.join(", ", permittedDns)));
+        }
     }
 
     private Authority createRootAuthority(int pathLenConstraint) throws GeneralSecurityException {
@@ -198,6 +257,22 @@ public final class CertificateGenerator {
                 .addExtension(Extensions.subjectKeyIdentifier(subjectKey))
                 .addExtension(
                         Extensions.authorityKeyIdentifier(issuerKey != null ? issuerKey : subjectKey));
+
+        NameConstraints constraints = nameConstraints();
+        if (!constraints.isEmpty()) {
+            // Applied to every CA in the hierarchy, not just the root. A root used directly as a
+            // trust anchor may have its own extensions skipped by a validator, because path
+            // validation begins below the anchor. An intermediate is inside the path, so its
+            // constraints are always processed.
+            builder.addExtension(Extensions.nameConstraints(
+                    constraints.permittedDns(),
+                    constraints.permittedIps().stream()
+                            .map(NameConstraints.Cidr::encoded)
+                            .toList(),
+                    constraints.excludeAllIpAddresses()
+                            ? List.of(new byte[8], new byte[32]) // all of IPv4 and IPv6
+                            : List.of()));
+        }
         return builder.signWith(signingKey, SignatureAlgorithm.forSigningKey(signingKey));
     }
 

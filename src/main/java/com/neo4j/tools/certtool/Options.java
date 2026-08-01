@@ -31,6 +31,9 @@ import java.util.Set;
  * @param existingCaCertificate an existing CA certificate to issue from, instead of a new one
  * @param existingCaKey the matching CA private key
  * @param caPasswordFile password file for an existing CA key
+ * @param nameConstraints whether to bind a generated CA to the names it was created for
+ * @param permitDns extra DNS subtrees the CA may issue within
+ * @param permitIp extra address ranges the CA may issue within
  * @param owner {@code user[:group]} to give the generated files, when running as root
  * @param dryRun report what would be done and write nothing
  * @param force overwrite non-empty output directories
@@ -55,6 +58,9 @@ public record Options(
         Optional<Path> existingCaCertificate,
         Optional<Path> existingCaKey,
         Optional<Path> caPasswordFile,
+        boolean nameConstraints,
+        List<String> permitDns,
+        List<String> permitIp,
         Optional<String> owner,
         boolean dryRun,
         boolean force,
@@ -131,6 +137,9 @@ public record Options(
                 Optional.empty(),
                 Optional.empty(),
                 Optional.empty(),
+                true,
+                List.of(),
+                List.of(),
                 Optional.empty(),
                 false,
                 false,

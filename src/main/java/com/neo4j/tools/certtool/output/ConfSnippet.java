@@ -135,8 +135,24 @@ public final class ConfSnippet {
     }
 
     /** The warning written alongside a generated CA's private key. */
-    public static String caReadme() {
-        return """
+    public static String caReadme(java.util.List<String> constraintLines) {
+        String limits = constraintLines.isEmpty()
+                ? """
+                  This CA is NOT name constrained. It can issue a certificate for any name at
+                  all, including public ones such as google.com. Anyone who trusts it and who
+                  obtains this key can impersonate any site to them.
+                  """
+                : "This CA is name constrained. It can only issue certificates for:\n\n"
+                        + constraintLines.stream()
+                                .map(line -> "  * " + line + "\n")
+                                .collect(java.util.stream.Collectors.joining())
+                        + """
+
+                        Anything outside those limits is refused by validators that enforce name
+                        constraints, and this tool will refuse to issue for it. Adding a node
+                        outside them means creating a new CA.
+                        """;
+        return limits + "\n" + """
             This directory holds the certificate authority for the cluster.
 
             The private key here can issue a certificate that every cluster member will
