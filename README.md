@@ -262,6 +262,23 @@ certificates, real organisational naming, and only the two client-facing scopes:
   --generate-password --out ./certs
 ```
 
+It reports what it is about to do, including the limits it derives for the CA:
+
+```
+neo4j-cert-tool 1.2.0
+  trust mode     ca (Local root CA signs one leaf certificate per node)
+  key type       RSA 3072-bit
+  scopes         bolt, https
+  leaf validity  90 days
+  passwords      generated, one per node
+  CA limits      DNS names at or below example.com
+                 IP addresses in 10.0.0.0/8
+```
+
+Those last two lines are worth reading before every run that creates a CA. They are what the CA will
+be permanently allowed to issue for — see
+[What the CA is allowed to issue for](#what-the-ca-is-allowed-to-issue-for).
+
 ### Checking before you commit to it
 
 Any invocation can be prefixed with `--dry-run` to see what it would do without doing any of it. This
@@ -295,6 +312,12 @@ Under ./certs:
   core1/certificates/bolt/trusted/root-ca.crt    rw-r--r-- (0644)
   core1/certificates/bolt/revoked/               rwxr-xr-x (0755)   empty, for CRLs
   ...
+
+Would generate a new certificate authority. Keep it off the cluster machines.
+  It would be limited to issuing certificates for:
+    DNS names at or below example.com
+    IP addresses in 10.0.0.0/8
+  Nodes outside those limits could not be added to it later.
 
 Would generate 5 key pair(s): 2 node(s) x 2 scope(s), plus the CA.
 
@@ -330,8 +353,8 @@ Check what you actually got, rather than trusting the flags:
 ```bash
 openssl x509 -in ./certs/core1/certificates/bolt/public.crt -noout -subject -dates
 # subject=C=GB, L=London, O=Example Ltd, OU=Platform bolt, CN=core1.example.com
-# notBefore=Jul 28 18:59:44 2026 GMT
-# notAfter=Oct 26 19:04:44 2026 GMT      (90 days)
+# notBefore=Aug  1 20:02:59 2026 GMT     (dates are relative to when you run it;
+# notAfter=Oct 30 20:07:59 2026 GMT       the gap is the 90 days that was asked for)
 ```
 
 ## Using a configuration file
@@ -429,7 +452,11 @@ than producing certificates every peer would reject:
 ```
 Error: This CA is name constrained and cannot issue for:
   evil: google.com
-It may only issue for DNS names at or below: example.com, localhost
+It may only issue for DNS names at or below: example.com
+
+Certificates for those names would be rejected by every peer that trusts this CA, so they
+are not written. Use a CA whose constraints cover these names, or create a new one without
+--ca-cert.
 ```
 
 Widen the limits when creating the CA with `--permit-dns <suffix>` and `--permit-ip <cidr>`, both
@@ -923,7 +950,7 @@ mvn verify
 mvn verify
 ```
 
-301 tests. Alongside the unit tests for the DER encoder, PEM handling, key encryption, password file
+325 tests. Alongside the unit tests for the DER encoder, PEM handling, key encryption, password file
 parsing and argument parsing, the suite:
 
 - **completes real TLS handshakes** over loopback using the generated files, loading them the way
@@ -969,17 +996,17 @@ The version in `pom.xml` is the single source of truth, and the tag must agree w
 
 ```bash
 # 1. bump the version, commit it
-mvn versions:set -DnewVersion=1.1.0 -DgenerateBackupPoms=false
-git commit -am "Release 1.1.0"
+mvn versions:set -DnewVersion=1.3.0 -DgenerateBackupPoms=false
+git commit -am "Release 1.3.0"
 
 # 2. tag that commit and push
-git tag v1.1.0
-git push origin main v1.1.0
+git tag v1.3.0
+git push origin main v1.3.0
 ```
 
 If the tag and `pom.xml` disagree the release fails immediately with a message saying so, rather
 than publishing a jar whose `version` command reports something else. A tag with a suffix —
-`v1.1.0-rc1` — is published as a prerelease automatically.
+`v1.3.0-rc1` — is published as a prerelease automatically.
 
 To re-run a release for a tag that already exists, use the workflow's manual trigger and give it the
 tag name.
@@ -1006,7 +1033,7 @@ Every release asset also carries a signed build provenance attestation, which pr
 this repository's workflow from a specific commit rather than uploaded by hand:
 
 ```bash
-gh attestation verify neo4j-cert-tool-1.1.0.jar --repo <owner>/neo4j-cert-tool
+gh attestation verify neo4j-cert-tool-1.3.0.jar --repo <owner>/neo4j-cert-tool
 ```
 
 Releases are built with `-Dproject.build.outputTimestamp` set to the tagged commit's date, so the jar
