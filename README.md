@@ -265,7 +265,7 @@ certificates, real organisational naming, and only the two client-facing scopes:
 It reports what it is about to do, including the limits it derives for the CA:
 
 ```
-neo4j-cert-tool 1.2.0
+neo4j-cert-tool 1.2.1
   trust mode     ca (Local root CA signs one leaf certificate per node)
   key type       RSA 3072-bit
   scopes         bolt, https
