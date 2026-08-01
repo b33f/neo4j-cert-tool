@@ -31,6 +31,7 @@ Example of creating certs for a three-node cluster with a local CA and generated
 - [Quick start](#quick-start)
 - [Trust modes](#trust-modes)
 - [Changing the defaults](#changing-the-defaults)
+  - [What the CA is allowed to issue for](#what-the-ca-is-allowed-to-issue-for)
   - [Checking before you commit to it](#checking-before-you-commit-to-it)
   - [Confirming the result](#confirming-the-result)
 - [Using a configuration file](#using-a-configuration-file)
@@ -196,9 +197,51 @@ Everything below is for when you *do* have a reason.
 | `--scopes` | all four | You only need some channels encrypted, e.g. `bolt,https` for a single instance with no cluster or backup traffic. |
 | `--organisation`, `--organisational-unit`, `--country`, `--locality`, `--state` | `O=Neo4j Cluster` | Your certificates have to carry real organisational naming. `--country` takes a two-letter ISO 3166 code. |
 | `--ca-common-name`, `--intermediate-common-name` | `Neo4j Cluster Root CA`, `Neo4j Cluster Issuing CA` | The CA should be identifiable as yours in logs and trust stores. |
+| `--permit-dns <suffix>` | derived: the **parent domain** of each node name | The CA must also be able to issue for a domain no current node uses — a second site, or a migration to new naming. Repeatable. |
+| `--permit-ip <cidr>` | derived: the **private range** each node address sits in | Nodes will later be added from an address range none of the current ones occupy. Takes CIDR (`10.0.0.0/8`) or a bare address, which means that host alone. Repeatable. |
+| `--no-name-constraints` | off — the CA **is** constrained | Almost never. Only if something in your environment mishandles the extension. It removes the one limit on what a stolen CA key could be used for. |
 
 Note that the scope name is appended to the organisational unit automatically, so a certificate is
 always identifiable by the policy it serves — `OU=Platform cluster`, `OU=Platform bolt`, and so on.
+
+### What the CA is allowed to issue for
+
+The last three options above have no fixed default: the CA's limits are **derived from the node
+names you give**. A cluster of `core1.example.com` … `core3.example.com` on `10.0.0.11` … `10.0.0.13`
+produces a CA that may issue for `example.com` and anything beneath it, and for any address in
+`10.0.0.0/8` — so `core9.example.com` can be added later, but `google.com` never can.
+
+The tool prints the derived limits before it writes anything:
+
+```
+  CA limits      DNS names at or below example.com
+                 IP addresses in 10.0.0.0/8
+```
+
+Use `--permit-dns` and `--permit-ip` to widen that when the derived answer is too narrow — they add
+to the derived limits rather than replacing them:
+
+```bash
+./scripts/neo4j-cert-tool \
+  --node core1:core1.example.com,10.0.0.11 \
+  --node core2:core2.example.com,10.0.0.12 \
+  --permit-dns example.net \
+  --permit-ip 192.168.0.0/16 \
+  --generate-password --out ./certs
+```
+
+```
+  CA limits      DNS names at or below example.com
+                 DNS names at or below example.net
+                 IP addresses in 10.0.0.0/8
+                 IP addresses in 192.168.0.0/16
+```
+
+Getting this wrong is recoverable but awkward: the constraint is fixed when the CA is created, so
+widening it later means creating a new CA and redistributing trust to every node. Run with
+`--dry-run` first if you are unsure, and see
+[Limiting what the CA can issue for](#limiting-what-the-ca-can-issue-for) for how the limits are
+derived and — importantly — which validators actually enforce them.
 
 An example that moves away from every relevant default — RSA keys for an old client, 90-day
 certificates, real organisational naming, and only the two client-facing scopes:
