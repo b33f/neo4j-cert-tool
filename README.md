@@ -1,6 +1,6 @@
 # neo4j-cert-tool
 
-Generates TLS certificates for a Neo4j 2025.x or 2026.x cluster, in the layout and format the database
+Generates TLS certificates (AKA SSL Certs) for a Neo4j 2025.x or 2026.x cluster, in the layout and format the database
 expects, with encrypted private keys and the file permissions Neo4j documents.
 
 Written for **JDK 21 LTS and later** with **no third-party dependencies at runtime** — X.509 encoding,
