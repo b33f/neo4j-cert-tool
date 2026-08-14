@@ -1,7 +1,8 @@
 # neo4j-cert-tool
 
 Generates TLS certificates (AKA SSL Certs) for a Neo4j 2025.x or 2026.x cluster, in the layout and format the database
-expects, with encrypted private keys and the file permissions Neo4j documents.
+expects, with encrypted private keys and the file permissions Neo4j documents.  
+This tool works both with Community Edition as well as Enterprise Edition of Neo4j.
 
 Written for **JDK 21 LTS and later** with **no third-party dependencies at runtime** — X.509 encoding,
 key generation, PKCS#8 encryption and filesystem permissions are all done through the JDK. JUnit is
