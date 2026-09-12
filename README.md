@@ -21,6 +21,7 @@ Example of creating certs for a three-node cluster with a local CA and generated
   --generate-password --out ./certs 
   ```
 
+the --node option is in the form of name:[hostname,ipaddr], the option needs at least a hostname or IP, but multiples of each are supported.
 
 > This is not a supported Neo4j tool, it is provided without warranty, and not independently audited. For production, prefer certificates from
 > a real certificate authority — see [Security design, and its limits](#security-design-and-its-limits).
@@ -62,6 +63,8 @@ Example of creating certs for a three-node cluster with a local CA and generated
 - [Reference](#reference)
 
 ## Build
+
+Note that pre-built binaries are in the releases at https://github.com/b33f/neo4j-cert-tool/releases 
 
 ```bash
 mvn package
