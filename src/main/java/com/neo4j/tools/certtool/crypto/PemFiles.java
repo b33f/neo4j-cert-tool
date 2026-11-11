@@ -13,6 +13,7 @@ import java.security.Signature;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /** Reads the PEM files this tool writes, and the ones a user supplies with {@code --ca-cert}. */
@@ -59,34 +60,50 @@ public final class PemFiles {
     /**
      * Reads a PKCS#8 private key, encrypted or not.
      *
+     * <p>The file is read and scanned as raw bytes rather than as a {@code String}: for an
+     * unencrypted key the PEM body <em>is</em> the private key, and a {@code String} could never be
+     * cleared afterwards. Every buffer holding key material is zeroed on the way out; the decoded
+     * DER handed to the JDK is zeroed too, since the key factories copy what they parse.
+     *
      * @param password used only when the file holds an encrypted key; may be null otherwise
      */
     public static PrivateKey readPrivateKey(Path file, char[] password)
             throws IOException, GeneralSecurityException {
-        String document = Files.readString(file, StandardCharsets.UTF_8);
-        if (Pem.contains(document, Pem.LABEL_ENCRYPTED_PRIVATE_KEY)) {
-            if (password == null || password.length == 0) {
-                throw new IOException(file + " is encrypted but no password was supplied");
+        byte[] document = Files.readAllBytes(file);
+        try {
+            if (Pem.contains(document, Pem.LABEL_ENCRYPTED_PRIVATE_KEY)) {
+                if (password == null || password.length == 0) {
+                    throw new IOException(file + " is encrypted but no password was supplied");
+                }
+                byte[] der = Pem.decode(document, Pem.LABEL_ENCRYPTED_PRIVATE_KEY);
+                try {
+                    return Pkcs8.decrypt(der, password);
+                } catch (GeneralSecurityException e) {
+                    // A wrong password shows up as a padding or integrity failure; say what it means.
+                    throw new GeneralSecurityException(
+                            "Cannot decrypt " + file + " — the password appears to be wrong", e);
+                } finally {
+                    Arrays.fill(der, (byte) 0);
+                }
             }
-            byte[] der = Pem.decode(document, Pem.LABEL_ENCRYPTED_PRIVATE_KEY);
-            try {
-                return Pkcs8.decrypt(der, password);
-            } catch (GeneralSecurityException e) {
-                // A wrong password shows up as a padding or integrity failure; say what it means.
-                throw new GeneralSecurityException(
-                        "Cannot decrypt " + file + " — the password appears to be wrong", e);
+            if (Pem.contains(document, Pem.LABEL_PRIVATE_KEY)) {
+                byte[] der = Pem.decode(document, Pem.LABEL_PRIVATE_KEY);
+                try {
+                    return Pkcs8.read(der);
+                } finally {
+                    Arrays.fill(der, (byte) 0);
+                }
             }
+            if (Pem.contains(document, "RSA PRIVATE KEY")) {
+                throw new IOException(
+                        file
+                                + " is a PKCS#1 key. Neo4j deprecates that format; convert it with:\n"
+                                + "  openssl pkcs8 -topk8 -in <file> -out private.key");
+            }
+            throw new IOException(file + ": no PRIVATE KEY or ENCRYPTED PRIVATE KEY block found");
+        } finally {
+            Arrays.fill(document, (byte) 0);
         }
-        if (Pem.contains(document, Pem.LABEL_PRIVATE_KEY)) {
-            return Pkcs8.read(Pem.decode(document, Pem.LABEL_PRIVATE_KEY));
-        }
-        if (document.contains("-----BEGIN RSA PRIVATE KEY-----")) {
-            throw new IOException(
-                    file
-                            + " is a PKCS#1 key. Neo4j deprecates that format; convert it with:\n"
-                            + "  openssl pkcs8 -topk8 -in <file> -out private.key");
-        }
-        throw new IOException(file + ": no PRIVATE KEY or ENCRYPTED PRIVATE KEY block found");
     }
 
     /**

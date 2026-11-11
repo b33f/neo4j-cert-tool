@@ -28,14 +28,16 @@ jobs:
 
     steps:
       - name: Check out
-        uses: actions/checkout@v7
+        # Pinned to a commit, not a mutable tag: this workflow holds contents:write and
+        # id-token:write, so a compromised action could sign releases as this repository.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ inputs.tag || github.ref }}
           # The commit date is used as the build timestamp, so history is needed.
           fetch-depth: 0
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           # Built on the oldest supported JDK, so the artifact cannot accidentally depend on
@@ -45,9 +47,14 @@ jobs:
 
       - name: Resolve the version and check it against pom.xml
         id: version
+        # The tag reaches this script through an environment variable rather than being
+        # interpolated into the shell text: a ref name may legally contain $, backticks or
+        # semicolons, and an interpolated value becomes shell code.
+        env:
+          TAG_INPUT: ${{ inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          TAG="${{ inputs.tag || github.ref_name }}"
+          TAG="$TAG_INPUT"
           VERSION="${TAG#v}"
           POM_VERSION=$(mvn --batch-mode --quiet help:evaluate \
             -Dexpression=project.version -DforceStdout)
@@ -78,9 +85,10 @@ jobs:
             verify
 
       - name: Assemble the release assets
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          VERSION="${{ steps.version.outputs.version }}"
           STAGE="neo4j-cert-tool-$VERSION"
 
           mkdir -p "dist/$STAGE/bin" "dist/$STAGE/scripts"
@@ -97,9 +105,10 @@ jobs:
           cat dist/SHA256SUMS.txt
 
       - name: Confirm the packaged jar runs and reports the right version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          VERSION="${{ steps.version.outputs.version }}"
           REPORTED=$(java -jar "dist/neo4j-cert-tool-$VERSION.jar" version | head -1)
           echo "$REPORTED"
           # Guards against shipping a jar whose manifest version does not match the tag.
@@ -111,7 +120,7 @@ jobs:
       - name: Attest build provenance
         # Records where and how these files were built, so consumers can verify their origin
         # with: gh attestation verify <file> --repo ${{ github.repository }}
-        uses: actions/attest-build-provenance@v4
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
           subject-path: |
             dist/neo4j-cert-tool-*.jar
@@ -120,14 +129,18 @@ jobs:
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
+          # The tag reaches the command line through an environment variable rather than being
+          # interpolated into the shell text, for the same reason as the version step above.
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          PRERELEASE_FLAG: ${{ steps.version.outputs.prerelease }}
         run: |
           set -euo pipefail
-          VERSION="${{ steps.version.outputs.version }}"
-          gh release create "${{ steps.version.outputs.tag }}" \
+          gh release create "$RELEASE_TAG" \
             --title "neo4j-cert-tool $VERSION" \
             --generate-notes \
             --verify-tag \
-            ${{ steps.version.outputs.prerelease }} \
+            $PRERELEASE_FLAG \
             "dist/neo4j-cert-tool-$VERSION.jar" \
             "dist/neo4j-cert-tool-$VERSION.zip" \
             dist/SHA256SUMS.txt

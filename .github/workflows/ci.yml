@@ -33,10 +33,12 @@ jobs:
 
     steps:
       - name: Check out
-        uses: actions/checkout@v7
+        # Pinned to a commit, not a mutable tag: this workflow's inputs are under committer
+        # control, and a compromised action would run with the repository's token.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up JDK ${{ matrix.java }}
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: ${{ matrix.java }}
@@ -64,7 +66,7 @@ jobs:
       - name: Upload test reports
         # Only useful when something failed, and keeps successful runs cheap.
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: surefire-${{ matrix.os }}-jdk${{ matrix.java }}
           path: target/surefire-reports/
