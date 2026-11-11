@@ -38,6 +38,15 @@ import java.util.Set;
  * @param dryRun report what would be done and write nothing
  * @param force overwrite non-empty output directories
  * @param quiet suppress the informational summary
+ * @param checkOnly report update availability and download nothing ({@code update check})
+ * @param preReleases consider alpha, beta and rc tags when updating
+ * @param versionPin update to this tag rather than the latest release
+ * @param skillAction what {@code skill} was asked to do
+ * @param skillName the skill a skill action addresses, when one was given
+ * @param skillAll operate on every skill ({@code skill install --all}, {@code skill remove --all})
+ * @param agents the agents to operate on, from {@code --agent}; empty means every detected one
+ * @param refreshCatalog force a catalog fetch before consulting it
+ * @param noUpdateCheck suppress the automatic once-a-day update-availability notice
  */
 public record Options(
         Command command,
@@ -64,14 +73,48 @@ public record Options(
         Optional<String> owner,
         boolean dryRun,
         boolean force,
-        boolean quiet) {
+        boolean quiet,
+        boolean checkOnly,
+        boolean preReleases,
+        Optional<String> versionPin,
+        SkillAction skillAction,
+        Optional<String> skillName,
+        boolean skillAll,
+        List<String> agents,
+        boolean refreshCatalog,
+        boolean noUpdateCheck) {
 
     /** What the tool was asked to do. */
     public enum Command {
         GENERATE,
         VERIFY,
+        UPDATE,
+        SKILL,
         HELP,
         VERSION
+    }
+
+    /** What the {@code skill} command was asked to do. */
+    public enum SkillAction {
+        INSTALL,
+        LIST,
+        CHECK,
+        REMOVE,
+        REFRESH;
+
+        /** Parses a bare subcommand word, as in {@code skill install}. */
+        public static SkillAction parse(String word) {
+            return switch (word.toLowerCase(java.util.Locale.ROOT)) {
+                case "install" -> INSTALL;
+                case "list" -> LIST;
+                case "check" -> CHECK;
+                case "remove" -> REMOVE;
+                case "refresh" -> REFRESH;
+                default -> throw new IllegalArgumentException(
+                        "Unknown skill action '" + word + "'. Expected install, list, check, "
+                                + "remove or refresh.");
+            };
+        }
     }
 
     /**
@@ -142,6 +185,15 @@ public record Options(
                 List.of(),
                 Optional.empty(),
                 false,
+                false,
+                false,
+                false,
+                false,
+                Optional.empty(),
+                null,
+                Optional.empty(),
+                false,
+                List.of(),
                 false,
                 false);
     }

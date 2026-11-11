@@ -17,6 +17,10 @@ public final class Help {
             USAGE
               neo4j-cert-tool [generate] --node <name>[:<san>,...] ... [options]
               neo4j-cert-tool verify --out <dir>
+              neo4j-cert-tool update [check] [--pre-releases] [--version <tag>]
+              neo4j-cert-tool skill install [self | <skill>] [--all] [--agent <id>] [--refresh]
+              neo4j-cert-tool skill list | check | refresh
+              neo4j-cert-tool skill remove [<skill>] [--all]
               neo4j-cert-tool help | version
 
             The tool writes one bundle per cluster member under the output directory:
@@ -176,6 +180,62 @@ public final class Help {
                                           and no password is asked for.
               --force                     Overwrite existing files.
               --quiet                     Print only warnings and errors.
+              --no-update-check           Do not run the automatic once-a-day check that
+                                          announces a newer release. The check runs only on
+                                          interactive generate/verify runs and never downloads
+                                          anything; 'update' is unaffected. The environment
+                                          variable %s=false switches it off for a machine.
+
+            UPDATING
+              update                      Swap the running jar for the latest stable GitHub
+                                          release. Only stable v<major>.<minor>.<patch> tags are
+                                          considered.
+              update check                Report whether a newer release exists and download
+                                          nothing. Exits 1 when one does, so a script can gate
+                                          on it, and 0 when up to date.
+              update --pre-releases       Also consider alpha, beta and rc tags.
+              update --version v0.1.0     Move to a named tag. Also the only way to downgrade,
+                                          since an unpinned update never goes backwards.
+
+              Only the jar is replaced: the wrapper scripts find it by relative path and carry
+              no version of their own. The download is verified against the release's
+              SHA256SUMS.txt and swapped in atomically; a mismatch leaves the running jar
+              untouched. On Windows the running jar may be locked, in which case the tool
+              swaps via a .old file or tells you what to move by hand.
+
+            AGENT SKILLS
+              Installs skills that teach AI coding agents how to drive this tool: the embedded
+              self-skill (SKILL.md plus per-subcommand references), or any skill from the curated
+              catalog at github.com/neo4j-contrib/neo4j-skills.
+
+              skill install                        self-skill into every detected agent
+              skill install <skill>                one catalog skill into every detected agent
+              skill install --all                  self-skill plus every catalog skill
+              skill install --agent <id>           scope any install to one agent (repeatable)
+              skill list                           per-(skill × agent) state
+              skill check                          drift vs source; exits 1 when drift is found
+              skill remove <skill>                 remove one skill
+              skill remove --all                   remove every catalog skill (self preserved)
+              skill refresh                        force a catalog fetch
+
+              The self-skill is addressable as 'self' (canonical) or by the tool's own name,
+              neo4j-cert-tool (alias). Passing an agent name as the positional — for example
+              'skill install claude-code' — is a hard error: use --agent instead.
+
+              Supported agents: %s
+
+              Detection is by configuration directory: an agent counts as installed when its
+              config directory (for example ~/.claude) exists. With no --agent, every detected
+              agent is covered in one go, which also suits multi-agent orchestrators that reuse
+              the underlying agents' skill directories.
+
+              The catalog is cached under the user's cache directory with a 24h lifetime; install,
+              list and check auto-refresh a stale cache and fall back to the cached copy on
+              network failure, with a warning. When the binary version changes, installed
+              self-skill bundles are refreshed on the next interactive run — never during a
+              non-interactive run, so the skill surface an agent sees never changes mid-task.
+              Disable with NEO4J_CERT_TOOL_SKILL_AUTO_REFRESH=false, or refresh explicitly with
+              'skill install'.
 
             VERIFYING
               neo4j-cert-tool verify --out <dir>
@@ -233,6 +293,8 @@ public final class Help {
                         Pkcs8.DEFAULT_ITERATIONS,
                         TrustMode.names(),
                         Scope.names(),
-                        KeyType.names() + " (aliases: " + String.join(", ", KeyType.aliases()) + ")");
+                        KeyType.names() + " (aliases: " + String.join(", ", KeyType.aliases()) + ")",
+                        com.neo4j.tools.certtool.skill.AgentRegistry.ids(),
+                        com.neo4j.tools.certtool.update.UpdateNotice.ENV_VARIABLE);
     }
 }

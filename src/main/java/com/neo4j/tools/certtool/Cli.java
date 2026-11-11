@@ -4,6 +4,7 @@ import com.neo4j.tools.certtool.model.KeyType;
 import com.neo4j.tools.certtool.model.NodeSpec;
 import com.neo4j.tools.certtool.model.Scope;
 import com.neo4j.tools.certtool.model.TrustMode;
+import com.neo4j.tools.certtool.skill.AgentRegistry;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -37,16 +38,22 @@ public final class Cli {
     /** Options that take no value. */
     private static final Set<String> FLAGS = Set.of(
             "install", "generate-password", "shared-password", "dry-run", "no-name-constraints",
-            "force", "quiet", "help", "version");
+            "force", "quiet", "help", "version", "pre-releases", "all", "refresh",
+            "no-update-check");
 
     private Cli() {}
 
     public static Options parse(String[] args) throws UsageException {
         List<String> arguments = new ArrayList<>(List.of(args));
 
-        // The configuration file is read first so that command line arguments override it.
+        // The configuration file is read first so that command line arguments override it. The
+        // command word is positional, so it is lifted out and kept at the front: splicing the
+        // file's arguments ahead of the user's own must not displace it.
         Optional<Path> configFile = extractConfigFile(arguments);
         List<String> expanded = new ArrayList<>();
+        if (!arguments.isEmpty() && !arguments.getFirst().startsWith("-")) {
+            expanded.add(arguments.removeFirst());
+        }
         if (configFile.isPresent()) {
             expanded.addAll(readConfigFile(configFile.get()));
         }
@@ -68,6 +75,17 @@ public final class Cli {
                     draft.command = Options.Command.HELP;
                     continue;
                 }
+                if (draft.command == Options.Command.UPDATE && argument.equals("check")) {
+                    draft.checkOnly = true;
+                    continue;
+                }
+                // The skill command's own grammar: 'skill <action> [<skill-name>]', with bare
+                // words carrying the same meaning they would in a dedicated command.
+                if (draft.command == Options.Command.SKILL) {
+                    if (consumeSkillWord(draft, argument)) {
+                        continue;
+                    }
+                }
                 throw new UsageException("Unexpected argument: " + argument);
             }
 
@@ -77,6 +95,22 @@ public final class Cli {
             if (equals >= 0) {
                 inlineValue = name.substring(equals + 1);
                 name = name.substring(0, equals);
+            }
+
+            // --version is overloaded: bare it selects the version command, with a value it pins
+            // an update to a named tag. The pinned value may arrive as --version=v0.1.0 or as
+            // the token after --version when the command is update.
+            if (name.equals("version") && inlineValue != null) {
+                draft.versionPin = inlineValue;
+                continue;
+            }
+            if (name.equals("version")
+                    && inlineValue == null
+                    && draft.command == Options.Command.UPDATE
+                    && index < expanded.size()
+                    && !expanded.get(index).startsWith("-")) {
+                draft.versionPin = expanded.get(index++);
+                continue;
             }
 
             if (FLAGS.contains(name)) {
@@ -102,10 +136,13 @@ public final class Cli {
         return switch (word.toLowerCase(Locale.ROOT)) {
             case "generate" -> Options.Command.GENERATE;
             case "verify" -> Options.Command.VERIFY;
+            case "update" -> Options.Command.UPDATE;
+            case "skill" -> Options.Command.SKILL;
             case "help" -> Options.Command.HELP;
             case "version" -> Options.Command.VERSION;
             default -> throw new UsageException(
-                    "Unknown command '" + word + "'. Expected generate, verify, help or version.");
+                    "Unknown command '" + word + "'. Expected generate, verify, update, skill, "
+                            + "help or version.");
         };
     }
 
@@ -118,6 +155,10 @@ public final class Cli {
                 }
             }
             case "shared-password" -> draft.sharedPassword = value;
+            case "pre-releases" -> draft.preReleases = value;
+            case "all" -> draft.skillAll = value;
+            case "refresh" -> draft.refreshCatalog = value;
+            case "no-update-check" -> draft.noUpdateCheck = value;
             case "dry-run" -> draft.dryRun = value;
             case "no-name-constraints" -> draft.nameConstraints = !value;
             case "force" -> draft.force = value;
@@ -174,6 +215,14 @@ public final class Cli {
                     draft.passwordMode = PasswordProvider.Mode.FILE;
                 }
                 case "pbkdf2-iterations" -> draft.pbkdf2Iterations = parseIterations(value);
+                case "agent" -> {
+                    if (com.neo4j.tools.certtool.skill.AgentRegistry.byId(value).isEmpty()) {
+                        throw new IllegalArgumentException(
+                                "Unknown agent '" + value + "'. Supported: "
+                                        + com.neo4j.tools.certtool.skill.AgentRegistry.ids());
+                    }
+                    draft.agents.add(value);
+                }
                 case "config" -> throw new UsageException(
                         "--config may not appear inside a configuration file");
                 default -> throw new UsageException(
@@ -182,6 +231,44 @@ public final class Cli {
         } catch (IllegalArgumentException e) {
             throw new UsageException("--" + name + ": " + e.getMessage());
         }
+    }
+
+    /**
+     * Consumes a bare word of the skill grammar, when it is one.
+     *
+     * <p>The first such word selects the action; install and remove then accept one further word
+     * naming the skill. Naming an agent positionally is a hard error, since that reads as an
+     * instruction to install to a single agent — which is what {@code --agent} is for — and a
+     * silent misread would install into the wrong set of agents.
+     */
+    private static boolean consumeSkillWord(Draft draft, String word) throws UsageException {
+        if (draft.skillAction == null) {
+            try {
+                draft.skillAction = Options.SkillAction.parse(word);
+                return true;
+            } catch (IllegalArgumentException e) {
+                if (AgentRegistry.byId(word).isPresent()) {
+                    throw new UsageException(
+                            "'" + word
+                                    + "' names an agent, not a skill. Use --agent " + word
+                                    + " to scope the install, or 'skill install' with no argument"
+                                    + " for every detected agent.");
+                }
+                return false;
+            }
+        }
+        boolean takesASkillName = draft.skillAction == Options.SkillAction.INSTALL
+                || draft.skillAction == Options.SkillAction.REMOVE;
+        if (takesASkillName && draft.skillName == null) {
+            if (AgentRegistry.byId(word).isPresent()) {
+                throw new UsageException(
+                        "'" + word
+                                + "' names an agent, not a skill. Use --agent " + word + ".");
+            }
+            draft.skillName = word;
+            return true;
+        }
+        return false;
     }
 
     private static boolean parseBoolean(String name, String value) throws UsageException {
@@ -317,10 +404,25 @@ public final class Cli {
         boolean dryRun;
         boolean force;
         boolean quiet;
+        boolean checkOnly;
+        boolean preReleases;
+        String versionPin;
+        Options.SkillAction skillAction;
+        String skillName;
+        boolean skillAll;
+        final List<String> agents = new ArrayList<>();
+        boolean refreshCatalog;
+        boolean noUpdateCheck;
 
         Options build() throws UsageException {
             if (command == Options.Command.GENERATE) {
                 validateForGenerate();
+            }
+            if (command == Options.Command.UPDATE) {
+                validateForUpdate();
+            }
+            if (command == Options.Command.SKILL) {
+                validateForSkill();
             }
             return new Options(
                     command,
@@ -354,7 +456,66 @@ public final class Cli {
                     Optional.ofNullable(owner),
                     dryRun,
                     force,
-                    quiet);
+                    quiet,
+                    checkOnly,
+                    preReleases,
+                    Optional.ofNullable(versionPin),
+                    skillAction,
+                    Optional.ofNullable(skillName),
+                    skillAll,
+                    List.copyOf(agents),
+                    refreshCatalog,
+                    noUpdateCheck);
+        }
+
+        private void validateForUpdate() throws UsageException {
+            if (noUpdateCheck) {
+                throw new UsageException(
+                        "--no-update-check suppresses the automatic notice, which 'update' does "
+                                + "not run in the first place: update is itself the explicit check");
+            }
+            if (checkOnly && versionPin != null) {
+                throw new UsageException(
+                        "--version cannot be combined with 'update check': checking is only "
+                                + "defined against the latest release. Use 'update --version "
+                                + versionPin + "' to move to that tag.");
+            }
+            rejectSkillOnlyOptions();
+        }
+
+        private void validateForSkill() throws UsageException {
+            if (skillAction == null) {
+                throw new UsageException(
+                        "The skill command needs an action: install, list, check, remove or"
+                                + " refresh. For example:  skill install");
+            }
+            if (skillAll && skillName != null) {
+                throw new UsageException(
+                        "--all cannot be combined with a named skill: it means '"
+                                + skillActionToString() + " every skill'");
+            }
+            if (skillName != null && skillAction != Options.SkillAction.INSTALL
+                    && skillAction != Options.SkillAction.REMOVE) {
+                throw new UsageException(
+                        "skill " + skillActionToString() + " takes no skill name");
+            }
+            if (skillAll && skillAction != Options.SkillAction.INSTALL
+                    && skillAction != Options.SkillAction.REMOVE) {
+                throw new UsageException(
+                        "--all applies to 'skill install' and 'skill remove', not to skill "
+                                + skillActionToString());
+            }
+        }
+
+        private String skillActionToString() {
+            return skillAction.toString().toLowerCase(java.util.Locale.ROOT);
+        }
+
+        private void rejectSkillOnlyOptions() throws UsageException {
+            if (skillAction != null || skillAll || refreshCatalog || !agents.isEmpty()) {
+                throw new UsageException(
+                        "--all, --refresh and --agent only apply to the skill command");
+            }
         }
 
         private List<NodeSpec> dedupeNodes() throws UsageException {
@@ -368,6 +529,12 @@ public final class Cli {
         }
 
         private void validateForGenerate() throws UsageException {
+            if (checkOnly || preReleases || versionPin != null) {
+                throw new UsageException(
+                        "--pre-releases and --version only apply to 'update'; check is its "
+                                + "subcommand: 'update check'");
+            }
+            rejectSkillOnlyOptions();
             if (nodes.isEmpty()) {
                 throw new UsageException(
                         """

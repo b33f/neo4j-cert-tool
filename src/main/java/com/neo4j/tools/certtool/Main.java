@@ -12,6 +12,7 @@ import com.neo4j.tools.certtool.output.Reporter;
 import com.neo4j.tools.certtool.verify.BundleVerifier;
 import java.io.IOException;
 import java.io.PrintStream;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.GeneralSecurityException;
 import java.security.PrivateKey;
@@ -60,6 +61,24 @@ public final class Main {
         }
 
         Reporter reporter = new Reporter(out, err, options.quiet());
+        // A version change makes every installed self-skill bundle stale; interactive runs are
+        // where refreshing is safe, because an agent's view of the tool surface must not move.
+        // Kept off help and version, whose output should stay exact.
+        if (options.command() == Options.Command.GENERATE
+                || options.command() == Options.Command.VERIFY
+                || options.command() == Options.Command.UPDATE) {
+            autoRefreshSkills(reporter);
+        }
+        // The once-a-day "a newer version exists" courtesy, for the commands a person runs by
+        // hand. Explicit checks belong to the update command itself.
+        if ((options.command() == Options.Command.GENERATE
+                        || options.command() == Options.Command.VERIFY)
+                && !options.noUpdateCheck()
+                && !com.neo4j.tools.certtool.update.UpdateNotice.disabledByEnvironment(
+                        System.getenv(com.neo4j.tools.certtool.update.UpdateNotice.ENV_VARIABLE))
+                && PasswordProvider.terminalAvailable()) {
+            runUpdateNotice(reporter);
+        }
         try {
             return switch (options.command()) {
                 case HELP -> {
@@ -78,6 +97,8 @@ public final class Main {
                 }
                 case GENERATE -> generate(options, reporter);
                 case VERIFY -> verify(options, reporter);
+                case UPDATE -> update(options, reporter);
+                case SKILL -> skills(options, reporter);
             };
         } catch (IOException | GeneralSecurityException e) {
             err.println("Error: " + e.getMessage());
@@ -356,6 +377,149 @@ public final class Main {
     }
 
     // --- verify ----------------------------------------------------------------------------
+
+    /** The GitHub API root this tool updates itself from. */
+    private static final String UPDATE_API_BASE = "https://api.github.com/repos/b33f/neo4j-cert-tool";
+
+    /** Only download URLs under this prefix are followed, in {@code update} as in the API. */
+    private static final String UPDATE_DOWNLOAD_PREFIX =
+            "https://github.com/b33f/neo4j-cert-tool/releases/download/";
+
+    /**
+     * Checks for, or installs, a new release.
+     *
+     * <p>{@code update check} exits 1 when a newer version exists, so a script can gate on it; the
+     * neo4j-cli convention this follows treats "newer available" as the notable answer.
+     */
+    private int update(Options options, Reporter reporter) throws IOException {
+        var releases =
+                new com.neo4j.tools.certtool.update.Releases(UPDATE_API_BASE, UPDATE_DOWNLOAD_PREFIX);
+        var update = new com.neo4j.tools.certtool.update.Update(
+                runningJar(),
+                version(),
+                releases,
+                reporter,
+                options.preReleases(),
+                options.versionPin().orElse(null));
+        var outcome = options.checkOnly() ? update.check() : update.install();
+        return outcome == com.neo4j.tools.certtool.update.Update.Outcome.NEWER_AVAILABLE
+                ? EXIT_FAILURE
+                : EXIT_OK;
+    }
+
+    /**
+     * The jar this class was loaded from, or null when running from a directory of classes, as a
+     * development build does.
+     */
+    private static Path runningJar() {
+        try {
+            var location = Main.class.getProtectionDomain().getCodeSource().getLocation();
+            Path path = Path.of(location.toURI());
+            return Files.isRegularFile(path) ? path : null;
+        } catch (Exception notAFileLocation) {
+            return null;
+        }
+    }
+
+    // --- skill ------------------------------------------------------------------------------
+
+    /**
+     * Installs, inspects or removes the agent skills: the embedded self-skill, or any skill from
+     * the curated catalog.
+     *
+     * <p>{@code skill check} exits 1 when drift was found, so a script can gate on it, mirroring
+     * {@code update check}.
+     */
+    private int skills(Options options, Reporter reporter) throws IOException {
+        var self = new com.neo4j.tools.certtool.skill.SelfSkill(version());
+        var catalog = new com.neo4j.tools.certtool.skill.Catalog(
+                com.neo4j.tools.certtool.skill.Catalog.userCacheDirectory(),
+                com.neo4j.tools.certtool.skill.Catalog.standardErrors());
+        var targets = resolveAgents(options);
+        var skills = new com.neo4j.tools.certtool.skill.Skills(
+                self, catalog, targets, reporter);
+        return switch (options.skillAction()) {
+            case INSTALL -> {
+                skills.install(options.skillName(), options.skillAll(), options.refreshCatalog());
+                yield EXIT_OK;
+            }
+            case LIST -> {
+                skills.list(options.refreshCatalog());
+                yield EXIT_OK;
+            }
+            case CHECK -> {
+                int drift = skills.check(options.refreshCatalog());
+                if (drift == 0) {
+                    reporter.print("No drift found.");
+                }
+                yield drift == 0 ? EXIT_OK : EXIT_FAILURE;
+            }
+            case REMOVE -> {
+                skills.remove(options.skillName(), options.skillAll());
+                yield EXIT_OK;
+            }
+            case REFRESH -> {
+                skills.refresh();
+                yield EXIT_OK;
+            }
+        };
+    }
+
+    /** The agents a skill action operates on: those named with {@code --agent}, or all detected. */
+    private static List<com.neo4j.tools.certtool.skill.AgentRegistry> resolveAgents(Options options) {
+        if (!options.agents().isEmpty()) {
+            return options.agents().stream()
+                    .map(id -> com.neo4j.tools.certtool.skill.AgentRegistry.byId(id).orElseThrow())
+                    .toList();
+        }
+        return com.neo4j.tools.certtool.skill.AgentRegistry.detectedAgents();
+    }
+
+    /**
+     * Refreshes installed self-skill bundles that trail the running version — but only from an
+     * interactive terminal. An agent harness or script runs with its streams redirected: it must
+     * never observe the tool's skill surface change in the middle of a task. Agents refresh
+     * explicitly with {@code skill install}; the automatic behaviour is disabled with the
+     * environment variable {@code NEO4J_CERT_TOOL_SKILL_AUTO_REFRESH=false}.
+     */
+    private void autoRefreshSkills(Reporter reporter) {
+        if (!PasswordProvider.terminalAvailable()
+                || "false".equalsIgnoreCase(System.getenv("NEO4J_CERT_TOOL_SKILL_AUTO_REFRESH"))) {
+            return;
+        }
+        try {
+            var self = new com.neo4j.tools.certtool.skill.SelfSkill(version());
+            var skills = new com.neo4j.tools.certtool.skill.Skills(
+                    self,
+                    new com.neo4j.tools.certtool.skill.Catalog(
+                            com.neo4j.tools.certtool.skill.Catalog.userCacheDirectory(),
+                            com.neo4j.tools.certtool.skill.Catalog.standardErrors()),
+                    com.neo4j.tools.certtool.skill.AgentRegistry.detectedAgents(),
+                    reporter);
+            skills.autoRefresh();
+        } catch (Exception refreshFailure) {
+            // Never let skill housekeeping stop the command the user actually asked for.
+            reporter.warn("Skill auto-refresh failed: " + refreshFailure.getMessage());
+        }
+    }
+
+    /**
+     * The automatic update-availability check. Everything it does is best-effort: the notice is a
+     * courtesy, so the network attempt is bounded to once a day and any failure is silent.
+     */
+    private void runUpdateNotice(Reporter reporter) {
+        try {
+            var releases = new com.neo4j.tools.certtool.update.Releases(
+                    UPDATE_API_BASE, UPDATE_DOWNLOAD_PREFIX);
+            var notice = new com.neo4j.tools.certtool.update.UpdateNotice(
+                    com.neo4j.tools.certtool.skill.Catalog.userCacheRoot().resolve("update-check"),
+                    releases,
+                    version());
+            notice.check().ifPresent(reporter::print);
+        } catch (Exception noticeFailure) {
+            // Never let the notice break the command the user actually asked for.
+        }
+    }
 
     private int verify(Options options, Reporter reporter) throws IOException {
         SecureRandom random = new SecureRandom();

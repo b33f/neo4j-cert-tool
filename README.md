@@ -30,7 +30,9 @@ the --node option is in the form of name:[hostname,ipaddr], the option needs at 
 
 - [Build](#build)
 - [Running it](#running-it)
+  - [Updating](#updating)
 - [Quick start](#quick-start)
+  - [Agent skills](#agent-skills)
 - [Trust modes](#trust-modes)
 - [Changing the defaults](#changing-the-defaults)
   - [What the CA is allowed to issue for](#what-the-ca-is-allowed-to-issue-for)
@@ -55,6 +57,7 @@ the --node option is in the form of name:[hostname,ipaddr], the option needs at 
   - [Alternative: SDKMAN (macOS, Linux, WSL)](#alternative-sdkman-macos-linux-wsl)
   - [Check the toolchain](#check-the-toolchain)
 - [Tests](#tests)
+  - covered test by test in [TESTS.md](TESTS.md)
 - [Continuous integration and releases](#continuous-integration-and-releases)
   - [Cutting a release](#cutting-a-release)
   - [What a release contains](#what-a-release-contains)
@@ -114,6 +117,37 @@ fine, since it resolves the jar from its own location:
 sudo ln -s "$PWD/scripts/neo4j-cert-tool" /usr/local/bin/neo4j-cert-tool
 ```
 
+### Updating
+
+The tool can update itself from this repository's GitHub releases:
+
+```bash
+neo4j-cert-tool update              # download, verify and swap in the latest stable release
+neo4j-cert-tool update check        # report availability only; exits 1 if a newer release exists
+neo4j-cert-tool update --pre-releases   # also consider alpha, beta and rc tags
+neo4j-cert-tool update --version v1.2.1 # move to a named tag; the only way to downgrade
+```
+
+Only the jar is replaced — the wrapper scripts locate it by relative path and carry no version of
+their own. Before anything touches the running jar, the download is verified against the release's
+`SHA256SUMS.txt`, and the swap itself is atomic where the file system allows one; a checksum
+mismatch or a locked file leaves the running jar exactly as it was. Releases are additionally
+attested, so their origin can be verified independently with
+`gh attestation verify <file> --repo b33f/neo4j-cert-tool`.
+
+### Being told there is an update
+
+On an interactive `generate` or `verify` run, the tool checks for a newer release at most **once a
+day** (a timestamp in the user's cache directory bounds it) and prints one line if one exists:
+
+    A newer version is available: v1.3.0 (running 1.2.1). Run 'neo4j-cert-tool update' to install.
+
+The check costs one short request per day at most, downloads nothing, never runs for scripts or
+agent harnesses (there is no terminal to prompt on), and never delays a failing run — failures are
+silent. Switch it off per invocation with `--no-update-check`, or for a whole machine with the
+environment variable `NEO4J_CERT_TOOL_UPDATE_CHECK=false`. An explicit `neo4j-cert-tool update
+check` is always available and is never rate-limited by the once-a-day rule.
+
 ## Quick start
 
 A three-node cluster with a local CA and generated key passwords:
@@ -163,6 +197,44 @@ Confirm the result at any point:
 
 `help` documents every option. Run it first — it includes guidance on choosing a trust mode, which
 is the one decision worth thinking about.
+
+### Agent skills
+
+The tool teaches AI coding agents how to drive it. It installs either the embedded self-skill
+(SKILL.md plus per-subcommand references) or any skill from the curated catalog at
+[github.com/neo4j-contrib/neo4j-skills](https://github.com/neo4j-contrib/neo4j-skills):
+
+```bash
+neo4j-cert-tool skill install                    # self-skill into every detected agent
+neo4j-cert-tool skill install neo4j-cypher-skill # one catalog skill into every detected agent
+neo4j-cert-tool skill install --all              # self-skill + every catalog skill
+neo4j-cert-tool skill install --agent claude-code # scope any install to one agent
+neo4j-cert-tool skill list                       # per-(skill × agent) state
+neo4j-cert-tool skill check                      # drift vs source; exits 1 when drift is found
+neo4j-cert-tool skill remove <skill>             # remove one skill
+neo4j-cert-tool skill remove --all               # remove every catalog skill (self preserved)
+neo4j-cert-tool skill refresh                    # force a catalog fetch
+```
+
+The self-skill is addressable as `self` (canonical) or by the tool's own name,
+`neo4j-cert-tool` (alias). Passing an agent name as the positional is a hard error — use
+`--agent <name>` instead. Supported agents: Claude Code, Cursor, Windsurf, Copilot, Antigravity,
+Gemini CLI, Cline, Codex, Pi, OpenCode, Junie, Kiro — detected by the presence of each agent's
+configuration directory, so `skill install` with no argument covers every agent on the machine in
+one go.
+
+The catalog is cached under the user's cache directory (`~/Library/Caches/neo4j-cert-tool/` on
+macOS, XDG on Linux, `%LOCALAPPDATA%` on Windows) with a 24-hour lifetime: install, list and check
+auto-refresh a stale cache and fall back to the cached copy on network failure, with a warning.
+Installed self-skill bundles are refreshed on the next **interactive** run when the binary version
+changes — a non-interactive run (an agent harness, a script, a pipe) never changes the skill
+surface mid-task. Disable automatic refresh with `NEO4J_CERT_TOOL_SKILL_AUTO_REFRESH=false`, or
+refresh explicitly with `skill install`.
+
+The self-skill is embedded in the jar and needs no network. Catalog skills are third-party
+content: the tool installs them but never executes them, and an agent that loads one may later
+read and follow it — install them deliberately, and see
+[SECURITY.md](SECURITY.md#the-skill-commands-network-surface) for the trust model.
 
 ## Trust modes
 
@@ -954,8 +1026,8 @@ mvn verify
 mvn verify
 ```
 
-325 tests. Alongside the unit tests for the DER encoder, PEM handling, key encryption, password file
-parsing and argument parsing, the suite:
+414 test executions (314 test methods). Alongside the unit tests for the DER encoder, PEM handling,
+key encryption, password file parsing and argument parsing, the suite:
 
 - **completes real TLS handshakes** over loopback using the generated files, loading them the way
   Neo4j does — encrypted key plus password, chain from `public.crt`, trust from `trusted/` — with
@@ -977,9 +1049,15 @@ Two notes on JDK behaviour the tests pin down:
   maps the parameters through a generic `PBES2` implementation that drops the PRF, so the file
   decodes as PBKDF2's default HMAC-SHA1 and cannot be decrypted by anything — including OpenSSL.
   `Pkcs8` wraps the cipher's untouched parameter encoding instead.
-- `PEMEncoder`/`PEMDecoder` (JEP 470) do not exist before JDK 25 and are only preview APIs there,
+- **PEMEncoder**/`PEMDecoder` (JEP 470) do not exist before JDK 25 and are only preview APIs there,
   so using them would both raise the baseline and force `--enable-preview` on every user. PEM is a
   base64 body between two label lines, so `Pem` writes it directly.
+- **runs the self-update and agent-skill flows** against local servers impersonating the GitHub
+  release feed and the skill catalog — checksum verification, the host allowlist, redirect
+  handling, drift detection and catalog fallback.
+
+Every test in the suite is catalogued in [TESTS.md](TESTS.md), one row per test with the feature it
+exercises and what it verifies.
 
 ## Continuous integration and releases
 

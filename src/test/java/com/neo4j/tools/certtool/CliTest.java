@@ -407,5 +407,192 @@ class CliTest {
 
             assertThrows(Cli.UsageException.class, () -> parse("--config", config.toString()));
         }
+
+        @Test
+        void theCommandWordSurvivesAConfigFileSplicedBeforeIt(@TempDir Path directory)
+                throws Exception {
+            // Regression: splicing the file's arguments ahead of the user's own used to displace
+            // the leading command word, so 'verify --config f' failed as an unexpected argument.
+            Path config = directory.resolve("skills.properties");
+            Files.writeString(config, "out=./from-file\n");
+
+            Options options = parse("verify", "--config", config.toString());
+
+            assertEquals(Options.Command.VERIFY, options.command());
+        }
+    }
+
+    @Nested
+    @DisplayName("the update command")
+    class UpdateParsing {
+
+        @Test
+        void installsTheLatestStableByDefault() throws Exception {
+            Options options = parse("update");
+
+            assertEquals(Options.Command.UPDATE, options.command());
+            assertFalse(options.checkOnly());
+            assertFalse(options.preReleases());
+            assertTrue(options.versionPin().isEmpty());
+        }
+
+        @Test
+        void takesCheckAsASubcommand() throws Exception {
+            Options options = parse("update", "check");
+
+            assertEquals(Options.Command.UPDATE, options.command());
+            assertTrue(options.checkOnly());
+        }
+
+        @Test
+        void checkIsNotAWordAnywhereElse() {
+            assertThrows(Cli.UsageException.class, () -> parse("check"));
+            assertThrows(Cli.UsageException.class, () -> parse("verify", "check"));
+        }
+
+        @Test
+        void acceptsThePinInlineAndAsTheNextArgument() throws Exception {
+            assertEquals("v0.1.0", parse("update", "--version=v0.1.0").versionPin().orElseThrow());
+            assertEquals("v0.1.0", parse("update", "--version", "v0.1.0").versionPin().orElseThrow());
+        }
+
+        @Test
+        void bareVersionIsStillTheVersionCommand() throws Exception {
+            assertEquals(Options.Command.VERSION, parse("--version").command());
+            assertEquals(Options.Command.VERSION, parse("version").command());
+        }
+
+        @Test
+        void optsIntoPreReleases() throws Exception {
+            assertTrue(parse("update", "--pre-releases").preReleases());
+            assertTrue(parse("update", "check", "--pre-releases").preReleases());
+        }
+
+        @Test
+        void refusesToCheckAgainstAPinnedTag() {
+            assertThrows(
+                    Cli.UsageException.class, () -> parse("update", "check", "--version=v0.1.0"));
+        }
+
+        @Test
+        void updateOnlyOptionsAreRejectedOnAGenerateRun() {
+            assertThrows(Cli.UsageException.class, () -> parse("--node", "core1", "--pre-releases"));
+            assertThrows(
+                    Cli.UsageException.class, () -> parse("--node", "core1", "--version=v0.1.0"));
+        }
+    }
+
+    @Nested
+    @DisplayName("the skill command")
+    class SkillParsing {
+
+        @Test
+        void needsAnAction() {
+            assertThrows(Cli.UsageException.class, () -> parse("skill"));
+        }
+
+        @Test
+        void parsesEveryAction() throws Exception {
+            assertEquals(Options.SkillAction.INSTALL, parse("skill", "install").skillAction());
+            assertEquals(Options.SkillAction.LIST, parse("skill", "list").skillAction());
+            assertEquals(Options.SkillAction.CHECK, parse("skill", "check").skillAction());
+            assertEquals(Options.SkillAction.REMOVE, parse("skill", "remove").skillAction());
+            assertEquals(Options.SkillAction.REFRESH, parse("skill", "refresh").skillAction());
+        }
+
+        @Test
+        void namesASkillPositionally() throws Exception {
+            Options options = parse("skill", "install", "neo4j-cypher-skill");
+
+            assertEquals(Options.SkillAction.INSTALL, options.skillAction());
+            assertEquals(
+                    java.util.Optional.of("neo4j-cypher-skill"), options.skillName());
+            assertTrue(options.agents().isEmpty(), "no --agent means every detected agent");
+        }
+
+        @Test
+        void scopingToAnAgentIsAFlagNotAPositional() throws Exception {
+            Options options =
+                    parse("skill", "install", "neo4j-cypher-skill", "--agent", "claude-code");
+
+            assertEquals(
+                    java.util.Optional.of("neo4j-cypher-skill"), options.skillName());
+            assertEquals(List.of("claude-code"), options.agents());
+        }
+
+        @Test
+        void acceptsRepeatedAgentsAndRejectsUnknownOnes() throws Exception {
+            assertEquals(
+                    List.of("claude-code", "cursor"),
+                    parse("skill", "install", "--agent", "claude-code", "--agent", "cursor")
+                            .agents());
+            assertThrows(
+                    Cli.UsageException.class,
+                    () -> parse("skill", "install", "--agent", "not-an-agent"));
+        }
+
+        @Test
+        void anAgentNameAsThePositionalIsAHardError() {
+            var failure = assertThrows(
+                    Cli.UsageException.class, () -> parse("skill", "install", "claude-code"));
+            assertTrue(failure.getMessage().contains("--agent"), failure.getMessage());
+        }
+
+        @Test
+        void allMeansEverySkill() throws Exception {
+            Options options = parse("skill", "install", "--all");
+
+            assertTrue(options.skillAll());
+            assertTrue(options.skillName().isEmpty());
+        }
+
+        @Test
+        void allCannotBeCombinedWithANamedSkill() {
+            assertThrows(
+                    Cli.UsageException.class, () -> parse("skill", "install", "some-skill", "--all"));
+        }
+
+        @Test
+        void allIsRejectedOnActionsThatTakeNoSetOfSkills() {
+            assertThrows(Cli.UsageException.class, () -> parse("skill", "check", "--all"));
+            assertThrows(Cli.UsageException.class, () -> parse("skill", "refresh", "--all"));
+        }
+
+        @Test
+        void agentsMayComeFromAConfigurationFile(@TempDir Path directory) throws Exception {
+            Path config = directory.resolve("skills.properties");
+            Files.writeString(config, "agent=cursor\nagent=claude-code\n");
+
+            Options options = parse("skill", "install", "--config", config.toString());
+
+            assertEquals(List.of("cursor", "claude-code"), options.agents());
+        }
+
+        @Test
+        void theAutomaticUpdateCheckCanBeSuppressed() throws Exception {
+            assertFalse(parse("--node", "core1").noUpdateCheck());
+            assertTrue(parse("--node", "core1", "--no-update-check").noUpdateCheck());
+            assertThrows(
+                    Cli.UsageException.class, () -> parse("update", "--no-update-check"));
+        }
+
+        @Test
+        void listAndCheckAndRefreshTakeNoSkillName() {
+            assertThrows(Cli.UsageException.class, () -> parse("skill", "list", "some-skill"));
+            assertThrows(Cli.UsageException.class, () -> parse("skill", "check", "some-skill"));
+        }
+
+        @Test
+        void forcesACatalogFetchWithRefresh() throws Exception {
+            assertTrue(parse("skill", "list", "--refresh").refreshCatalog());
+        }
+
+        @Test
+        void skillOptionsAreRejectedOnAGenerateRun() {
+            assertThrows(
+                    Cli.UsageException.class, () -> parse("--node", "core1", "--all"));
+            assertThrows(
+                    Cli.UsageException.class, () -> parse("--node", "core1", "--agent", "cursor"));
+        }
     }
 }

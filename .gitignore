@@ -6,6 +6,7 @@ Desktop.ini
 # ===== Editor/IDE =====
 .vscode/
 .idea/
+*.iml
 *.swp
 *.swo
 *~
@@ -16,39 +17,26 @@ Desktop.ini
 .env.*.local
 *.pem
 *.key
+# The file name CI's smoke test writes a password to; keep a local copy of
+# that flow out of sight too.
+pw.txt
 
-# ===== Logs =====
+# ===== Logs and JVM diagnostics =====
 *.log
-logs/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# ===== Node.js =====
-node_modules/
-dist/
-build/
-.npm/
-.pnp/
-.pnp.js
-
-# ===== Python =====
-__pycache__/
-*.py[cod]
-*.egg-info/
-.venv/
-venv/
-env/
-.pytest_cache/
+hs_err_pid*
+*.hprof
 
 # ===== Java =====
 *.class
 target/
 
-# ===== General build artifacts =====
+# ===== Build and generated material =====
 out/
 tmp/
 temp/
 *.bak
 bin/
 certs/
+
+# ===== Local tool settings =====
+.claude/settings.local.json
