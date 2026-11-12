@@ -6,12 +6,13 @@ Run them all with:
     mvn --batch-mode verify
 
 The suite is pure JUnit, needs no network, and stands up local HTTP servers where a test must
-impersonate one (the GitHub release feed, the skill catalog). Counts: 314 test methods, 414
+impersonate one (the GitHub release feed, the skill catalog). Counts: 333 test methods, 439
 executions once parameterized cases are expanded.
 
 The classes cover, in order: certificate content, the command line, dry runs, end-to-end runs,
 file permissions, name constraints, password handling, TLS handshakes, self-update, DER encoding,
-IP literal parsing, PEM encoding, PKCS#8 encryption, and the agent-skill system.
+IP literal parsing, PEM encoding, PKCS#8 encryption, key-generation strength, signature-algorithm
+selection, and the agent-skill system.
 
 ---
 
@@ -228,8 +229,13 @@ Where passwords come from and how they are protected in memory.
 | Password files | `readSingleFromRejectsAFileWithNothingInIt` | a file with only comments and blanks is rejected |
 | Generation | `areLongAndUseOnlyConfigSafeCharacters` | generated passwords are long and paste-safe in `neo4j.conf` |
 | Generation | `differPerSubjectAndAreStableWithinOne` | each subject gets its own password, stable within the run |
+| Generation | `manyGeneratedPasswordsAreAllDistinct` | a thousand generated passwords are all distinct, so no entropy is truncated away |
+| Generation | `generatedPasswordsSpanTheWholeAlphabet` | the full base64url alphabet is exercised, not a subset that would halve the effective entropy |
+| Generation | `generationConsumesTheSuppliedRandomness` | generation draws its full 24 bytes from the `SecureRandom` it was given |
 | Generation | `areReportedForTheRunSummary` | generated passwords are reported once at the end |
 | Generation | `suppliedPasswordsAreNotEchoedBack` | passwords the user supplied are not printed back |
+| Warnings | `aShortPasswordWarns` | a password file with short passwords warns that key encryption is only as strong as the password |
+| Warnings | `aStrongPasswordDoesNotWarn` | a password file with strong passwords stays quiet |
 | Lifecycle | `closingZeroesPasswords` | closing the provider zeroes every password it was holding |
 | Lifecycle | `closingZeroesGeneratedPasswords` | a generated password is zeroed on close too |
 
@@ -289,6 +295,7 @@ Real handshakes between generated endpoints: what the certificates actually do i
 | Feed hardening | `refusesADownloadUrlOutsideThisRepository` | an asset URL naming another host is refused before connecting |
 | Feed hardening | `reportsWhenNothingExistsAtThePinnedTag` | a pinned tag that does not exist is reported |
 | Feed hardening | `reportsAServerErrorInsteadOfGuessing` | an HTTP 500 is reported as an error |
+| Repository home | `updatesComeFromTheRepositoryHome` | the update feed and download prefix point at the repository's real home, `neo4j-labs/neo4j-cert-tool` |
 
 ## `DerTest` — DER encoding
 
@@ -366,9 +373,11 @@ The deliberately strict IPv4/IPv6 parser used for SANs and name constraints.
 | Round trip | `encryptedKeysRoundTripForEveryKeyType` | encrypted keys round-trip for every key type |
 | Decryption | `theWrongPasswordFails` | a wrong password fails cleanly |
 | Decryption | `aTruncatedPasswordFails` | a truncated password fails |
+| Decryption | `aCorruptedCiphertextFailsRatherThanYieldingAKey` | a flipped bit in the stored blob fails loudly instead of decoding to a usable key |
 | Randomness | `theSameKeyEncryptsDifferentlyEachTime` | fresh salt and IV each time |
 | Refusals | `emptyPasswordsAreRefused` | an empty password is refused |
 | Refusals | `tooFewIterationsAreRefused` | an iteration count below the floor is refused |
+| Refusals | `theProductionDefaultIsSixHundredThousandIterations` | the default iteration count is pinned at 600,000, the OWASP guidance for PBKDF2-HMAC-SHA256 |
 | Scheme | `theEncryptionSchemeIsPbes2WithAes256AndHmacSha256` | PBES2 with AES-256 and HMAC-SHA256, as Neo4j reads |
 | Scheme | `theIterationCountReachesTheEncodedParameters` | the iteration count reaches the encoded parameters |
 | Scheme | `theSaltIsSixteenBytes` | the salt is sixteen bytes |
@@ -377,6 +386,32 @@ The deliberately strict IPv4/IPv6 parser used for SANs and name constraints.
 | Plain keys | `theKeyAlgorithmCanBeReadBackFromAnUnencryptedKey` | the algorithm reads back from an unencrypted key |
 | Plain keys | `anUnknownKeyAlgorithmIsReported` | an unknown key algorithm is reported |
 | Plain keys | `unencryptedKeysCanStillBeRead` | unencrypted keys can still be read |
+
+## `KeyTypeTest` — key-generation strength
+
+That the raw key material has exactly the strength each `KeyType` claims — everything downstream
+can be correct while the keys themselves are silently weaker.
+
+| Feature | Test | What it verifies |
+| --- | --- | --- |
+| Key strength | `generatedKeysHaveTheClaimedStrength` | EC keys sit on secp256r1/secp384r1 (not just any curve of the same size) and RSA moduli are 3072/4096 bits |
+| Key pairing | `thePrivateKeyBelongsToItsPublicKey` | the private key signs and its own public key verifies, per key type |
+| Randomness | `generatedKeyPairsAreDistinct` | two generated key pairs are never the same |
+| Randomness | `generationConsumesTheSuppliedRandomness` | generation draws at least a seed's worth of entropy from the `SecureRandom` it was given |
+| Parsing | `unknownNamesAreRejected` | unknown or empty key-type names are rejected |
+| Parsing | `aliasesResolve` | `ec` and `rsa` resolve to the same types as their canonical names |
+
+## `SignatureAlgorithmTest` — signature-algorithm selection
+
+That the digest is never the weakest link in a certificate's signature.
+
+| Feature | Test | What it verifies |
+| --- | --- | --- |
+| Digest matching | `p256GetsSha256` | P-256 keys sign with SHA-256 |
+| Digest matching | `p384GetsSha384` | P-384 keys sign with SHA-384 |
+| Digest matching | `p521GetsSha512` | P-521 keys sign with SHA-512 (not a generated type, but the mapping must scale) |
+| Digest matching | `rsaGetsSha256` | RSA keys sign with SHA-256 |
+| Refusals | `unsupportedKeysAreRefused` | a DSA key is refused, not signed with some default |
 
 ## `AgentRegistryTest` — agent registry
 
