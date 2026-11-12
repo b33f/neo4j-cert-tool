@@ -94,6 +94,8 @@ public final class BundleVerifier {
     private final SecureRandom random;
     private final Instant now;
     private final List<Finding> findings = new ArrayList<>();
+    /** Set after the first scope is told the file system has no POSIX view, so later ones stay quiet. */
+    private boolean posixWarningGiven;
 
     public BundleVerifier(PasswordProvider passwords, SecureRandom random, Instant now) {
         this.passwords = passwords;
@@ -195,7 +197,11 @@ public final class BundleVerifier {
     private void checkPermissions(
             String location, Path keyFile, Path certificateFile, Path trustedDirectory) {
         if (!FilePermissions.posixSupported()) {
-            warning(location, "file system has no POSIX permissions, so they were not checked");
+            // Windows: say it once, not once per scope — the answer is the same for every one.
+            if (!posixWarningGiven) {
+                warning(location, "file system has no POSIX permissions, so they were not checked");
+                posixWarningGiven = true;
+            }
             return;
         }
         try {

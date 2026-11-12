@@ -338,6 +338,8 @@ class PasswordProviderTest {
 
     /** Counts how much randomness is actually drawn, delegating to a real source. */
     private static final class RecordingRandom extends SecureRandom {
+        private static final long serialVersionUID = 1L;
+
         int bytesRequested;
 
         @Override
