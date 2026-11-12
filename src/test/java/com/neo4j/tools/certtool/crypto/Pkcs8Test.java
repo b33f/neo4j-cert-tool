@@ -117,6 +117,24 @@ class Pkcs8Test {
         assertEquals(16, pbkdf2Salt(encrypted).length);
     }
 
+    @Test
+    void aCorruptedCiphertextFailsRatherThanYieldingAKey() throws Exception {
+        // Flipping any bit of the stored blob must fail loudly. A decode that silently returned a
+        // wrong-but-usable key would be far worse than an error.
+        KeyPair keyPair = KeyType.EC_P256.generate(random);
+        byte[] encrypted = Pkcs8.encrypt(keyPair.getPrivate(), PASSWORD, TEST_ITERATIONS, random);
+        encrypted[encrypted.length - 1] ^= 0x01;
+
+        assertThrows(Exception.class, () -> Pkcs8.decrypt(encrypted, PASSWORD));
+    }
+
+    @Test
+    void theProductionDefaultIsSixHundredThousandIterations() {
+        // Pins the OWASP guidance for PBKDF2-HMAC-SHA256. A lowering of this constant should be a
+        // deliberate, reviewed decision, never an accident.
+        assertEquals(600_000, Pkcs8.DEFAULT_ITERATIONS);
+    }
+
     @ParameterizedTest
     @EnumSource(KeyType.class)
     void theKeyAlgorithmCanBeReadBackFromAnUnencryptedKey(KeyType keyType) throws Exception {

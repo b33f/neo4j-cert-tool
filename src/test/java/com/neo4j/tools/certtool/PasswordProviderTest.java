@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -194,6 +195,53 @@ class PasswordProviderTest {
         }
 
         @Test
+        @DisplayName("hundreds of generated passwords are all distinct")
+        void manyGeneratedPasswordsAreAllDistinct() {
+            // 24 bytes of entropy per password makes a collision among thousands of draws
+            // effectively impossible; a repeat means the entropy source is broken or truncated.
+            java.util.Set<String> seen = new java.util.HashSet<>();
+            try (PasswordProvider passwords = PasswordProvider.generating(random)) {
+                for (int i = 0; i < 1_000; i++) {
+                    seen.add(new String(passwords.forSubject("node-" + i)));
+                }
+            }
+            assertEquals(1_000, seen.size(), "every generated password must be distinct");
+        }
+
+        @Test
+        @DisplayName("the full alphabet is exercised, not a subset of it")
+        void generatedPasswordsSpanTheWholeAlphabet() {
+            // Across 200 passwords (6,400 characters drawn uniformly from a 64-symbol alphabet)
+            // essentially every symbol should appear; a regeneration that only emitted, say,
+            // lowercase letters would halve the effective entropy without changing the length.
+            java.util.Set<Character> alphabet = new java.util.HashSet<>();
+            try (PasswordProvider passwords = PasswordProvider.generating(random)) {
+                for (int i = 0; i < 200; i++) {
+                    for (char c : passwords.forSubject("node-" + i)) {
+                        alphabet.add(c);
+                    }
+                }
+            }
+            assertTrue(
+                    alphabet.size() >= 55,
+                    "expected nearly all of the 64 base64url symbols, saw " + alphabet.size());
+        }
+
+        @Test
+        @DisplayName("generation draws its full 24 bytes from the SecureRandom it was given")
+        void generationConsumesTheSuppliedRandomness() {
+            RecordingRandom random = new RecordingRandom();
+            try (PasswordProvider passwords = PasswordProvider.generating(random)) {
+                passwords.forSubject("core1");
+            }
+
+            assertTrue(
+                    random.bytesRequested >= 24,
+                    "a generated password must draw its full 24 bytes of entropy from the supplied "
+                            + "source; drawing none would mean a hardcoded or truncated source");
+        }
+
+        @Test
         void suppliedPasswordsAreNotEchoedBack(@TempDir Path directory) throws Exception {
             // A password the user chose is theirs; repeating it in the summary would only put it
             // somewhere new.
@@ -227,5 +275,75 @@ class PasswordProviderTest {
         passwords.close();
 
         assertArrayEquals(new char[held.length], held);
+    }
+
+    @Test
+    @DisplayName("a password file with short passwords warns that they are weak")
+    void aShortPasswordWarns(@TempDir Path directory) throws Exception {
+        Path file = write(directory, "pw.txt", "core1=short\n");
+        makeOwnerOnly(file);
+        String stderr = captureStdErr(() -> {
+            try (PasswordProvider passwords = PasswordProvider.fromFile(file, random)) {
+                passwords.forSubject("core1");
+            } catch (IOException failure) {
+                throw new RuntimeException(failure);
+            }
+        });
+
+        assertTrue(stderr.contains("shorter than 12"), stderr);
+    }
+
+    @Test
+    @DisplayName("a password file with strong passwords stays quiet")
+    void aStrongPasswordDoesNotWarn(@TempDir Path directory) throws Exception {
+        Path file = write(directory, "pw.txt", "core1=a-long-enough-password\n");
+        makeOwnerOnly(file);
+        String stderr = captureStdErr(() -> {
+            try (PasswordProvider passwords = PasswordProvider.fromFile(file, random)) {
+                passwords.forSubject("core1");
+            } catch (IOException failure) {
+                throw new RuntimeException(failure);
+            }
+        });
+
+        assertEquals("", stderr, "no warning is due");
+    }
+
+    /**
+     * The file-permission warning would otherwise fire on every temp-dir file and drown out the
+     * warning under test.
+     */
+    private static void makeOwnerOnly(Path file) throws IOException {
+        try {
+            Files.setPosixFilePermissions(
+                    file,
+                    java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
+        } catch (UnsupportedOperationException notPosix) {
+            // Windows: the permission warning is skipped there anyway.
+        }
+    }
+
+    private static String captureStdErr(Runnable action) {
+        java.io.PrintStream original = System.err;
+        ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        System.setErr(new java.io.PrintStream(captured, true, StandardCharsets.UTF_8));
+        try {
+            action.run();
+        } finally {
+            System.err.flush();
+            System.setErr(original);
+        }
+        return captured.toString(StandardCharsets.UTF_8);
+    }
+
+    /** Counts how much randomness is actually drawn, delegating to a real source. */
+    private static final class RecordingRandom extends SecureRandom {
+        int bytesRequested;
+
+        @Override
+        public void nextBytes(byte[] bytes) {
+            bytesRequested += bytes.length;
+            super.nextBytes(bytes);
+        }
     }
 }
