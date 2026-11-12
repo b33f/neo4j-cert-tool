@@ -27,7 +27,7 @@ import org.junit.jupiter.api.io.TempDir;
  */
 class UpdateNoticeTest {
 
-    private static final String REPO_PATH = "/repos/b33f/neo4j-cert-tool";
+    private static final String REPO_PATH = "/repos/neo4j-labs/neo4j-cert-tool";
 
     @TempDir
     Path temp;
@@ -45,7 +45,7 @@ class UpdateNoticeTest {
         int port = server.getAddress().getPort();
         apiBase = "http://localhost:" + port + REPO_PATH;
         downloadPrefix = "http://localhost:" + port
-                + "/files/b33f/neo4j-cert-tool/releases/download/";
+                + "/files/neo4j-labs/neo4j-cert-tool/releases/download/";
         stampFile = temp.resolve("update-check");
     }
 

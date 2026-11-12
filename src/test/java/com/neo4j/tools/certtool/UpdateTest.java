@@ -37,8 +37,13 @@ import org.junit.jupiter.api.io.TempDir;
  */
 class UpdateTest {
 
-    private static final String REPO_PATH = "/repos/b33f/neo4j-cert-tool";
-    private static final String OWNER = "b33f/neo4j-cert-tool";
+    // Derived from the production constants, so the fake feed always mirrors the repository the
+    // tool really updates from; the test at the bottom pins that repository by name.
+    private static final String REPO_PATH =
+            Main.UPDATE_API_BASE.substring("https://api.github.com".length());
+    private static final String OWNER = Main.UPDATE_DOWNLOAD_PREFIX
+            .replace("https://github.com/", "")
+            .replace("/releases/download/", "");
 
     /** The latest stable release the fake feed offers. */
     private static final String LATEST_STABLE = "v1.3.0";
@@ -551,5 +556,14 @@ class UpdateTest {
             var failure = assertThrows(IOException.class, update::install);
             assertTrue(failure.getMessage().contains("HTTP 500"), failure.getMessage());
         }
+    }
+
+    @Test
+    @DisplayName("the self-update feed lives at the repository's home, neo4j-labs/neo4j-cert-tool")
+    void updatesComeFromTheRepositoryHome() {
+        assertEquals("https://api.github.com/repos/neo4j-labs/neo4j-cert-tool", Main.UPDATE_API_BASE);
+        assertEquals(
+                "https://github.com/neo4j-labs/neo4j-cert-tool/releases/download/",
+                Main.UPDATE_DOWNLOAD_PREFIX);
     }
 }

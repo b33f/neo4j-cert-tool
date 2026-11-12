@@ -67,7 +67,7 @@ the --node option is in the form of name:[hostname,ipaddr], the option needs at 
 
 ## Build
 
-Note that pre-built binaries are in the releases at https://github.com/b33f/neo4j-cert-tool/releases 
+Note that pre-built binaries are in the releases at https://github.com/neo4j-labs/neo4j-cert-tool/releases 
 
 ```bash
 mvn package
@@ -133,7 +133,7 @@ their own. Before anything touches the running jar, the download is verified aga
 `SHA256SUMS.txt`, and the swap itself is atomic where the file system allows one; a checksum
 mismatch or a locked file leaves the running jar exactly as it was. Releases are additionally
 attested, so their origin can be verified independently with
-`gh attestation verify <file> --repo b33f/neo4j-cert-tool`.
+`gh attestation verify <file> --repo neo4j-labs/neo4j-cert-tool`.
 
 ### Being told there is an update
 

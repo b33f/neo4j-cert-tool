@@ -378,12 +378,12 @@ public final class Main {
 
     // --- verify ----------------------------------------------------------------------------
 
-    /** The GitHub API root this tool updates itself from. */
-    private static final String UPDATE_API_BASE = "https://api.github.com/repos/b33f/neo4j-cert-tool";
+    /** The GitHub API root this tool updates itself from. Package-private so tests can pin it. */
+    static final String UPDATE_API_BASE = "https://api.github.com/repos/neo4j-labs/neo4j-cert-tool";
 
     /** Only download URLs under this prefix are followed, in {@code update} as in the API. */
-    private static final String UPDATE_DOWNLOAD_PREFIX =
-            "https://github.com/b33f/neo4j-cert-tool/releases/download/";
+    static final String UPDATE_DOWNLOAD_PREFIX =
+            "https://github.com/neo4j-labs/neo4j-cert-tool/releases/download/";
 
     /**
      * Checks for, or installs, a new release.

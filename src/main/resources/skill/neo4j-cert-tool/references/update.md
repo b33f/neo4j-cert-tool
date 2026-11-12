@@ -30,4 +30,4 @@
 - A development build (running from a class directory rather than a jar) can `check` but cannot
   swap: rebuild with `mvn package` instead.
 - Every release asset also carries a build-provenance attestation, verifiable with
-  `gh attestation verify <file> --repo b33f/neo4j-cert-tool`.
+  `gh attestation verify <file> --repo neo4j-labs/neo4j-cert-tool`.

@@ -8,7 +8,7 @@ consequences well beyond the tool itself. Reports are welcome.
 **Please do not open a public issue for a security problem.**
 
 Report it privately through GitHub's [private vulnerability
-reporting](https://github.com/b33f/neo4j-cert-tool/security/advisories/new). That opens a draft
+reporting](https://github.com/neo4j-labs/neo4j-cert-tool/security/advisories/new). That opens a draft
 advisory visible only to the maintainers.
 
 A useful report includes:
@@ -83,7 +83,7 @@ The GitHub hosts serve both the release metadata and the assets — there is no 
 service. These are listed explicitly rather than as a wildcard so that a network operator can
 reason precisely about firewall posture.
 
-**Integrity of GitHub release-asset storage for b33f/neo4j-cert-tool.** The jar and its
+**Integrity of GitHub release-asset storage for neo4j-labs/neo4j-cert-tool.** The jar and its
 `SHA256SUMS.txt` manifest are both fetched from GitHub-hosted release storage. Trust in the
 published artefacts reduces to trust in GitHub's storage of those assets for this repository.
 
@@ -101,7 +101,7 @@ release asset carries a [build provenance
 attestation](https://docs.github.com/en/actions/security-for-github-actions/security-hardening-your-deployments/about-security-hardening-with-artifact-attestations)
 minted at build time, verifiable with:
 
-    gh attestation verify <file> --repo b33f/neo4j-cert-tool
+    gh attestation verify <file> --repo neo4j-labs/neo4j-cert-tool
 
 ### Accepted residual risks
 
