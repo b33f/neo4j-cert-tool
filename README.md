@@ -711,9 +711,9 @@ explicit ACL granting the owner alone, which also stops inherited entries from a
 
 > ### No warranty, and when not to use this
 >
-> This tool is distributed under the GNU GPL v3, which **disclaims all warranty** — see sections 15
-> and 16 of [LICENSE](LICENSE). It is written carefully, tested thoroughly, and designed to be as
-> secure as it can be. It has **not** been independently audited or formally reviewed by anyone.
+> This tool is distributed under the Apache License 2.0, which **disclaims all warranty** — see the
+> "Warranty; Disclaimer of Damages" section (7) of [LICENSE](LICENSE). It is written carefully,
+> tested thoroughly, and designed to be as secure as it can be. It has **not** been independently audited or formally reviewed by anyone.
 >
 > **For a production deployment, get your certificates from a real certificate authority.** An
 > established CA — your organisation's internal PKI, or a public CA for anything client-facing —

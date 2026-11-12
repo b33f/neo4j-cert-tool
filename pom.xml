@@ -12,6 +12,14 @@
   <name>neo4j-cert-tool</name>
   <description>Generates TLS certificates for Neo4j clusters using only the JDK</description>
 
+  <licenses>
+    <license>
+      <name>Apache-2.0</name>
+      <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
+
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <!--

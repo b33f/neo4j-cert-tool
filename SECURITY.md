@@ -156,7 +156,8 @@ vendor.
 
 ## A note on what this tool is for
 
-It is not audited, and it carries no warranty — see [LICENSE](LICENSE), sections 15 and 16. For a
+It is not audited, and it carries no warranty — see [LICENSE](LICENSE), the "Warranty; Disclaimer of
+Damages" section. For a
 production deployment, obtain certificates from an established certificate authority and generate the
 key and signing request with long-audited tooling such as OpenSSL. The README
 [explains how](README.md#security-design-and-its-limits).
