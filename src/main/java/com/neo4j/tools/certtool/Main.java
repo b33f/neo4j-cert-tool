@@ -367,6 +367,10 @@ public final class Main {
                 options.outputDirectory(),
                 Layout.CERTIFICATES_DIRECTORY,
                 Layout.CERTIFICATES_DIRECTORY);
+        reporter.info(
+                "  %d. Point Java clients (cypher-shell, driver apps) at %s — the run's trust "
+                        + "anchors as PKCS#12, public certificates only, password 'changeit'.",
+                step++, options.outputDirectory().resolve(Layout.CLIENT_TRUSTSTORE_FILE));
         reporter.info("  %d. chown -R neo4j:neo4j <neo4j-home>/%s", step++, Layout.CERTIFICATES_DIRECTORY);
         reporter.info(
                 "  %d. Merge each node's %s into its conf/neo4j.conf, then restart the instance.",

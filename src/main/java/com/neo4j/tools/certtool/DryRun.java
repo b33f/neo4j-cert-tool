@@ -126,6 +126,13 @@ public final class DryRun {
         checkDestination(root, "output directory " + root);
         add(root, true, FilePermissions.PRIVATE_DIRECTORY, "holds every node's private key");
 
+        // Written in every trust mode, and also when the CA is reused rather than created here.
+        add(
+                Layout.clientTruststore(root),
+                false,
+                FilePermissions.PUBLIC_READ,
+                "trust anchors for Java clients");
+
         if (options.trustMode().usesCa() && options.existingCaCertificate().isEmpty()) {
             Path ca = root.resolve(Layout.CA_DIRECTORY);
             add(ca, true, FilePermissions.PRIVATE_DIRECTORY, null);

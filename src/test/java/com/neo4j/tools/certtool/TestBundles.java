@@ -109,6 +109,30 @@ final class TestBundles {
         return run;
     }
 
+    /**
+     * Runs the verify command against a work directory's {@code out}. The command word is
+     * positional, so it cannot go through {@link #run}, which appends the shared defaults first.
+     */
+    static Run verify(Path workDirectory) throws IOException {
+        List<String> arguments = new ArrayList<>(List.of(
+                "verify",
+                "--out", workDirectory.resolve("out").toString(),
+                "--password-file", passwordFile(workDirectory).toString(),
+                "--pbkdf2-iterations", TEST_ITERATIONS));
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
+        int exitCode;
+        try (PrintStream outStream = new PrintStream(out, true, StandardCharsets.UTF_8);
+                PrintStream errStream = new PrintStream(err, true, StandardCharsets.UTF_8)) {
+            exitCode = new Main(outStream, errStream).run(arguments.toArray(String[]::new));
+        }
+        return new Run(
+                exitCode,
+                workDirectory.resolve("out"),
+                out.toString(StandardCharsets.UTF_8),
+                err.toString(StandardCharsets.UTF_8));
+    }
+
     /** A two-node cluster with the given trust mode, which most tests need. */
     static Run twoNodeCluster(Path workDirectory, String mode, String... extraArguments)
             throws IOException {

@@ -42,6 +42,7 @@ the --node option is in the form of name:[hostname,ipaddr], the option needs at 
 - [Limiting what the CA can issue for](#limiting-what-the-ca-can-issue-for)
   - [Where the constraint is, and is not, enforced](#where-the-constraint-is-and-is-not-enforced)
 - [Trusting the CA on your machine](#trusting-the-ca-on-your-machine)
+  - [Java clients: the generated truststore](#java-clients-the-generated-truststore)
 - [What the certificates contain](#what-the-certificates-contain)
 - [Private key protection](#private-key-protection)
 - [File permissions](#file-permissions)
@@ -169,6 +170,7 @@ certs/<node>/certificates/<scope>/trusted/      trust anchors, mode 0755
 certs/<node>/certificates/<scope>/revoked/      empty, for CRLs, mode 0755
 certs/<node>/neo4j.conf.snippet                 settings to merge, mode 0400
 certs/ca/                                       the CA — move this off the machine
+certs/client-truststore.p12                     trust anchors for Java clients, mode 0644
 ```
 
 where `<scope>` is each of `bolt`, `https`, `cluster` and `backup`. The staging root is mode `0700`,
@@ -371,7 +373,7 @@ something is already in the way:
 ```
 DRY RUN — nothing will be written.
 
-Would create 17 files and 18 directories.
+Would create 18 files and 18 directories.
 
 Under ./certs:
   ./                                             rwx------ (0700)   holds every node's private key
@@ -632,6 +634,49 @@ a truststore containing the CA or import with `keytool -importcert -cacerts -ali
 None of this is needed for the cluster itself — Neo4j reads its trust anchors from each policy's
 `trusted/` directory, not from the operating system.
 
+### Java clients: the generated truststore
+
+The JVM loads trust material from a keystore, not from a directory of PEM files, so every Java
+client of the cluster — `cypher-shell`, a driver application, a Spring Data service — needs the
+trust anchors in PKCS#12 form. Every run therefore writes one at the staging root:
+
+```
+certs/client-truststore.p12
+```
+
+It holds the run's trust anchors and **public certificates only** (the root CA, or in
+`self-signed` mode every member's certificate), so it is safe to copy anywhere.
+
+**Why the password is `changeit`.** A Java keystore can hold two very different things: private
+keys, which must be kept secret, and trusted public certificates, which need not — a keystore
+holding only the latter is a *truststore*. This file is the latter: nothing in it but public
+certificates, the same root certificates that ship openly with Windows, macOS, Linux and every
+browser. The JDK's own `cacerts` file is exactly the same thing, and its password is `changeit`
+too. Encrypting public material with a secret password would add no security.
+
+The password still does two jobs — just not secrecy:
+
+- **Integrity.** In the JKS and PKCS#12 formats the password keys a cryptographic checksum that
+  detects corruption or tampering when the store is loaded.
+- **Guardrail.** Requiring a password — even a publicly known one — makes utilities like
+  `keytool` pause for explicit intent before an administrator modifies a truststore by accident.
+
+Strong generated passwords are reserved for the private keys, where they belong.
+
+Point a client at it:
+
+```bash
+# cypher-shell inside a container that mounts the truststore at /truststore.p12
+docker exec \
+  -e JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStore=/truststore.p12 -Djavax.net.ssl.trustStorePassword=changeit" \
+  neo4j-fleet cypher-shell -a neo4j+s://localhost:7687 -u neo4j \
+  "CALL fleetManagement.status();"
+```
+
+A driver application needs no system property — hand the keystore to the driver's trust
+configuration instead. `neo4j-cert-tool verify` checks the truststore is present, loadable, and
+covers every anchor the bundles trust.
+
 ## What the certificates contain
 
 Matched to what Neo4j 2025.x requires:
@@ -824,6 +869,12 @@ during development, and repeating that after any change to the extension code is
   password in clear text because Neo4j requires it there.
 - **One key pair per node per scope.** A key compromised on one channel does not extend to the
   others, and a single node's compromise does not implicate its peers.
+- **The client truststore holds no secret material.** `client-truststore.p12` contains only the
+  run's public trust anchors — the same public certificates that operating systems and browsers
+  ship openly, the contents of the JDK's own `cacerts`. Its well-known `changeit` password (the
+  JVM convention) buys an integrity checksum and a guardrail against accidental modification,
+  not secrecy, because there is nothing secret to protect. A test pins the property: every entry
+  must be a trusted certificate entry, and no alias may yield a key.
 - **Permissions are set at creation, not afterwards**, so a private key never exists on disk in a
   world-readable state, not even briefly. An existing file in the way is deleted rather than
   truncated, so a symlink cannot redirect a key to somewhere unprotected. POSIX is the primary

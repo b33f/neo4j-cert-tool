@@ -6,13 +6,13 @@ Run them all with:
     mvn --batch-mode verify
 
 The suite is pure JUnit, needs no network, and stands up local HTTP servers where a test must
-impersonate one (the GitHub release feed, the skill catalog). Counts: 333 test methods, 439
+impersonate one (the GitHub release feed, the skill catalog). Counts: 343 test methods, 450
 executions once parameterized cases are expanded.
 
 The classes cover, in order: certificate content, the command line, dry runs, end-to-end runs,
-file permissions, name constraints, password handling, TLS handshakes, self-update, DER encoding,
-IP literal parsing, PEM encoding, PKCS#8 encryption, key-generation strength, signature-algorithm
-selection, and the agent-skill system.
+file permissions, name constraints, password handling, TLS handshakes, the client truststore,
+self-update, DER encoding, IP literal parsing, PEM encoding, PKCS#8 encryption, key-generation
+strength, signature-algorithm selection, and the agent-skill system.
 
 ---
 
@@ -180,7 +180,7 @@ The permissions of everything the tool writes. Skipped where the file system has
 | Staging | `theStagingDirectoryIsPrivate` | the staging directory is 0700, because it holds every node's keys |
 | CA key | `theCaKeyIsProtected` | the CA private key is 0400 |
 | Conf snippet | `theConfSnippetIsProtected` | the conf snippet is 0400, because it contains the key password |
-| Exposure | `onlyPublicMaterialIsWorldReadable` | no generated file is readable by group or others except certificates |
+| Exposure | `onlyPublicMaterialIsWorldReadable` | no generated file is readable by group or others except certificates and the client truststore |
 | Creation window | `keysAreCreatedWithTheirFinalPermissions` | a private key is never briefly world-readable while being written |
 | Replacement | `existingFilesAreReplacedNotTruncated` | writing over an existing loose file replaces its permissions |
 | Symlinks | `symlinksAreNotFollowed` | a symlink in the way is replaced, not followed |
@@ -260,6 +260,24 @@ Real handshakes between generated endpoints: what the certificates actually do i
 | Key types | `rsaKeysAlsoHandshake` | RSA keys work end to end |
 | Key types | `p384KeysAlsoHandshake` | P-384 keys work end to end |
 | Protocol | `tls13IsNegotiated` | TLS 1.3 is negotiated, so the dropped CBC suites are not needed |
+
+## `TruststoreTest` — the client truststore
+
+The PKCS#12 truststore a run writes at the staging root, which Java clients (cypher-shell, driver
+applications) load to trust the cluster.
+
+| Feature | Test | What it verifies |
+| --- | --- | --- |
+| Trust modes | `caModeTrustsTheRoot` | ca mode's truststore holds exactly the CA certificate |
+| Trust modes | `selfSignedTrustsEveryMember` | self-signed mode's truststore holds every member's per-scope certificate, aliased by node and scope |
+| Trust modes | `intermediateModeTrustsTheRoot` | intermediate mode's truststore holds the root, as the nodes do |
+| CA reuse | `reusingAnExistingCaStillWritesOne` | a run that reuses a CA with `--ca-cert` still writes a truststore anchored at that CA |
+| Handshake | `aJavaClientCompletesAHandshakeThroughIt` | a client trusting only the truststore file authenticates a generated server in a real TLS handshake |
+| Verify | `verifyChecksIt` | verify reports the truststore loading and covering every anchor the bundles trust |
+| Contents safety | `holdsOnlyCertificateEntries` | in every mode, every entry is a trusted certificate entry and no alias yields private or secret key material — the property that makes the well-known `changeit` password safe |
+| Verify | `missingIsOnlyAWarning` | a missing truststore warns without failing, so pre-truststore bundles verify clean |
+| Verify | `corruptFails` | a truststore that does not load fails verification |
+| Verify | `incompleteFails` | a truststore missing an anchor the bundles trust fails verification |
 
 ## `UpdateTest` — self-update
 

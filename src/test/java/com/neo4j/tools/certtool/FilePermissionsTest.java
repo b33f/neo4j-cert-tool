@@ -89,7 +89,10 @@ class FilePermissionsTest {
             for (Path path : walk.filter(Files::isRegularFile).toList()) {
                 boolean shared = FilePermissions.readableByOthers(path);
                 String name = path.getFileName().toString();
-                boolean isPublic = name.endsWith(".crt");
+                // Certificates and the client truststore hold public material only: the
+                // truststore's password protects integrity, not secrecy.
+                boolean isPublic = name.endsWith(".crt")
+                        || name.equals(Layout.CLIENT_TRUSTSTORE_FILE);
                 assertEquals(
                         isPublic,
                         shared,

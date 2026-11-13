@@ -30,6 +30,10 @@ public final class Help {
               out/<node>/certificates/<scope>/trusted/      trust anchors, mode 0755
               out/<node>/certificates/<scope>/revoked/       empty, for CRLs, mode 0755
               out/<node>/neo4j.conf.snippet                 settings to merge into neo4j.conf
+              out/client-truststore.p12                    trust anchors as PKCS#12 for Java
+                                                           clients (cypher-shell, driver apps),
+                                                           mode 0644, password 'changeit' — it
+                                                           holds public certificates only
 
             Copy each node's certificates directory into that node's NEO4J_HOME, or use
             --install for the machine you are running on. Nothing is written outside the

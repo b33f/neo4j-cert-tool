@@ -9,6 +9,7 @@ import com.neo4j.tools.certtool.Options;
 import com.neo4j.tools.certtool.PasswordProvider;
 import com.neo4j.tools.certtool.crypto.Pem;
 import com.neo4j.tools.certtool.crypto.Pkcs8;
+import com.neo4j.tools.certtool.crypto.Truststore;
 import java.io.IOException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
@@ -24,6 +25,7 @@ import java.security.cert.CertificateEncodingException;
 import java.security.cert.X509Certificate;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Optional;
 
@@ -62,6 +64,7 @@ public final class BundleWriter {
         FilePermissions.createDirectories(root, FilePermissions.PRIVATE_DIRECTORY);
 
         writeAuthorities(root, result);
+        writeClientTruststore(root, result);
 
         for (NodeBundle bundle : result.nodes()) {
             writeNodeBundle(root.resolve(bundle.node().name()), bundle);
@@ -130,6 +133,52 @@ public final class BundleWriter {
         return com.neo4j.tools.certtool.model.NameConstraints.deriveFrom(
                         options.nodes(), options.permitDns(), options.permitIp())
                 .describe();
+    }
+
+    // --- Client truststore ------------------------------------------------------------------
+
+    /**
+     * Writes one truststore of the run's trust anchors at the staging root, for Java clients.
+     *
+     * <p>Neo4j, OpenSSL and most scripting languages load trust anchors from PEM files, but the
+     * JVM loads them from a keystore — so every Java client of the cluster (cypher-shell, a driver
+     * application) needs the anchors in PKCS#12 form. The file holds public certificates only and
+     * is safe to distribute anywhere; it is written whether the CA was created here or reused with
+     * {@code --ca-cert}, and in every trust mode. In {@code self-signed} mode the anchors are the
+     * peers' certificates themselves, deduplicated across scopes.
+     */
+    private void writeClientTruststore(Path root, Result result)
+            throws IOException, GeneralSecurityException {
+        LinkedHashMap<String, X509Certificate> anchors = new LinkedHashMap<>();
+        if (options.trustMode().usesCa()) {
+            // Both CA-backed modes trust the root only, so the root is the entire truststore.
+            anchors.put("root-ca", result.rootAuthority().orElseThrow().certificate());
+        } else {
+            for (NodeBundle bundle : result.nodes()) {
+                for (ScopeMaterial material : bundle.scopes()) {
+                    for (TrustAnchor anchor : material.trustAnchors()) {
+                        // A self-signed certificate is per node per scope, so the scope name is
+                        // part of the alias: without it, a member's bolt and https certificates
+                        // would collide and one would be silently dropped.
+                        anchors.putIfAbsent(
+                                alias(anchor) + "-" + material.scope().directoryName(),
+                                anchor.certificate());
+                    }
+                }
+            }
+        }
+        FilePermissions.write(
+                Layout.clientTruststore(root), Truststore.pkcs12(anchors), FilePermissions.PUBLIC_READ);
+        reporter.info(
+                "  %-14s %s",
+                "truststore",
+                "Java client trust anchors, public certificates only (PKCS#12, password 'changeit')");
+    }
+
+    /** The truststore alias for a trust anchor, derived from the file name it would be written as. */
+    private static String alias(TrustAnchor anchor) {
+        String fileName = anchor.fileName();
+        return fileName.endsWith(".crt") ? fileName.substring(0, fileName.length() - 4) : fileName;
     }
 
     // --- Node bundles ----------------------------------------------------------------------

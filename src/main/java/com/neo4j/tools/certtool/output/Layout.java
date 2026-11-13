@@ -26,7 +26,15 @@ public final class Layout {
     public static final String INTERMEDIATE_KEY_FILE = "intermediate.key";
     public static final String CA_README_FILE = "README.txt";
 
+    /** PKCS#12 truststore of the run's trust anchors, for Java clients. Sits at the bundle root. */
+    public static final String CLIENT_TRUSTSTORE_FILE = "client-truststore.p12";
+
     private Layout() {}
+
+    /** The truststore of the run's trust anchors, written at the staging root. */
+    public static Path clientTruststore(Path root) {
+        return root.resolve(CLIENT_TRUSTSTORE_FILE);
+    }
 
     /** The {@code certificates} directory inside a node bundle or a Neo4j installation. */
     public static Path certificates(Path root) {

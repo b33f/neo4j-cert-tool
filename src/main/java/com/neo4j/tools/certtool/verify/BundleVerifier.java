@@ -3,6 +3,7 @@ package com.neo4j.tools.certtool.verify;
 import com.neo4j.tools.certtool.PasswordProvider;
 import com.neo4j.tools.certtool.crypto.Oids;
 import com.neo4j.tools.certtool.crypto.PemFiles;
+import com.neo4j.tools.certtool.crypto.Truststore;
 import com.neo4j.tools.certtool.model.Scope;
 import com.neo4j.tools.certtool.output.FilePermissions;
 import com.neo4j.tools.certtool.output.Layout;
@@ -135,7 +136,61 @@ public final class BundleVerifier {
         for (Path bundle : bundles) {
             verifyBundle(bundle);
         }
+        verifyClientTruststore(root, bundles);
         return new Report(List.copyOf(findings));
+    }
+
+    /**
+     * Checks the client truststore at a staging root, which Java clients load to trust the
+     * cluster: that it is present, that it decrypts, and that it covers every trust anchor the
+     * bundles' {@code trusted/} directories hold.
+     *
+     * <p>Only a staging root is checked — a single bundle verified directly (a {@code NEO4J_HOME}
+     * or one node's directory) does not carry the truststore, which lives beside the bundles. A
+     * missing file is a warning rather than an error so bundles generated before the truststore
+     * existed still verify clean.
+     */
+    private void verifyClientTruststore(Path root, List<Path> bundles) throws IOException {
+        if (bundles.size() == 1 && bundles.getFirst().equals(root)) {
+            return;
+        }
+        Path truststore = Layout.clientTruststore(root);
+        String location = Layout.CLIENT_TRUSTSTORE_FILE;
+        if (!Files.isRegularFile(truststore)) {
+            warning(
+                    location,
+                    "not present — Java clients have no ready-made truststore; regenerate, or "
+                            + "build one from the CA certificate with keytool");
+            return;
+        }
+        try {
+            List<X509Certificate> stored = Truststore.anchors(truststore);
+            ok(location, "loads as PKCS#12 with " + stored.size() + " trust anchor(s)");
+
+            Set<X509Certificate> expected = new LinkedHashSet<>();
+            for (Path bundle : bundles) {
+                for (Scope scope : Scope.values()) {
+                    Path trusted = Layout.trusted(bundle, scope);
+                    if (Files.isDirectory(trusted)) {
+                        expected.addAll(readTrustAnchors(trusted));
+                    }
+                }
+            }
+            List<X509Certificate> missing = expected.stream()
+                    .filter(anchor -> stored.stream().noneMatch(anchor::equals))
+                    .toList();
+            if (missing.isEmpty()) {
+                ok(location, "covers every trust anchor in the bundles");
+            } else {
+                error(
+                        location,
+                        ("does not cover %d trust anchor(s) the bundles trust — a Java client would "
+                                        + "be refused where Neo4j itself connects")
+                                .formatted(missing.size()));
+            }
+        } catch (IOException | GeneralSecurityException e) {
+            error(location, "does not load: " + e.getMessage());
+        }
     }
 
     private void verifyBundle(Path bundle) throws IOException {
